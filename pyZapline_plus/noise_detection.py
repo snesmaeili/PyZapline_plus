@@ -1,79 +1,83 @@
 import numpy as np
-from scipy import signal
 
-def detect_noise_frequencies(data, sampling_rate, config):
+def find_next_noisefreq(pxx, f, minfreq=0, threshdiff=5, winsizeHz=3, maxfreq=None, lower_threshdiff=1.76091259055681, verbose=False):
     """
-    Detect noise frequencies in the data using Welch's method.
+    Search for the next noise frequency based on the spectrum starting from a minimum frequency.
     
     Args:
-    data (np.array): Input data, shape (channels, samples)
-    sampling_rate (float): Sampling rate of the data
-    config (dict): Configuration parameters
+    pxx (np.array): Power spectral density (in log space)
+    f (np.array): Frequency array
+    minfreq (float): Minimum frequency to consider
+    threshdiff (float): Threshold difference for peak detection
+    winsizeHz (float): Window size in Hz
+    maxfreq (float): Maximum frequency to consider
+    lower_threshdiff (float): Lower threshold difference
+    verbose (bool): If True, print debug information
     
     Returns:
-    list: Detected noise frequencies
+    tuple: (noisefreq, thisfreqs, thisdata, threshfound)
     """
-    minfreq = config['minfreq']
-    maxfreq = config['maxfreq']
-    detectionWinsize = config['detectionWinsize']
-    coarseFreqDetectPowerDiff = config['coarseFreqDetectPowerDiff']
-    coarseFreqDetectLowerPowerDiff = config['coarseFreqDetectLowerPowerDiff']
+    if maxfreq is None:
+        maxfreq = max(f) * 0.85
 
-    # Compute PSD using Welch's method
-    f, psd = signal.welch(data, fs=sampling_rate, window='hann', nperseg=sampling_rate)
+    if verbose:
+        print(f"Searching for first noise freq between {minfreq}Hz and {maxfreq}Hz...")
 
-    # Log-transform PSD and compute mean across channels
-    log_psd = 10 * np.log10(psd)
-    mean_log_psd = np.mean(log_psd, axis=0)
+    noisefreq = None
+    threshfound = None
+    thisfreqs = None
+    thisdata = None
+    winsize = round(pxx.shape[0] / (max(f) - min(f)) * winsizeHz)
+    meandata = np.mean(pxx, axis=1)
 
-    # Find frequencies within the specified range
-    freq_mask = (f >= minfreq) & (f <= maxfreq)
-    freqs = f[freq_mask]
-    mean_log_psd = mean_log_psd[freq_mask]
+    detectionstart = False
+    detected = True
+    i_startdetected = 0
+    i_enddetected = 0
 
-    noise_freqs = []
-    i = 0
-    while i < len(freqs):
-        # Define window for local PSD analysis
-        window_start = max(0, i - detectionWinsize // 2)
-        window_end = min(len(freqs), i + detectionWinsize // 2)
-        window = mean_log_psd[window_start:window_end]
+    i_start = max(np.argmax(f > minfreq) + 1, round(winsize / 2))
+    i_end = min(np.argmax(f >= maxfreq), len(f) - round(winsize / 2))
 
-        # Compute center power (mean of left and right thirds)
-        third = len(window) // 3
-        center_power = np.mean([np.mean(window[:third]), np.mean(window[-third:])])
+    lastfreq = 0
+    for i in range(i_start - round(winsize / 2), i_end - round(winsize / 2) + 1):
+        thisdata = meandata[i:i+winsize]
+        thisfreqs = f[i:i+winsize]
 
-        # Check if current frequency is an outlier
-        if mean_log_psd[i] - center_power > coarseFreqDetectPowerDiff:
-            noise_freq = freqs[i]
-            noise_freqs.append(noise_freq)
+        thisfreq = round(thisfreqs[round(len(thisfreqs) / 2)])
+        if verbose and thisfreq > lastfreq:
+            print(f"{thisfreq},", end="")
+            lastfreq = thisfreq
 
-            # Find end of the peak
-            while (i < len(freqs) and 
-                   mean_log_psd[i] - center_power > coarseFreqDetectLowerPowerDiff):
-                i += 1
+        third = round(len(thisdata) / 3)
+        center_thisdata = np.mean(np.concatenate([thisdata[:third], thisdata[2*third:]]))
+        thresh = center_thisdata + threshdiff
+
+        if not detected:
+            detectednew = thisdata[round(len(thisdata) / 2)] > thresh
+            if detectednew:
+                i_startdetected = round(i + (winsize - 1) / 2)
+                threshfound = thresh
         else:
-            i += 1
+            detectednew = thisdata[round(len(thisdata) / 2)] > center_thisdata + lower_threshdiff
+            i_enddetected = round(i + (winsize - 1) / 2)
 
-    return noise_freqs
+        if not detectionstart and detected and not detectednew:
+            detectionstart = True
+        elif detectionstart and detected and not detectednew:
+            noisefreq = f[np.argmax(meandata[i_startdetected:i_enddetected+1]) + i_startdetected]
+            if verbose:
+                print(f"\nfound {noisefreq}Hz!")
+                import matplotlib.pyplot as plt
+                plt.figure()
+                plt.plot(thisfreqs, thisdata)
+                plt.axhline(y=thresh, color='r', linestyle='-')
+                plt.axhline(y=center_thisdata, color='k', linestyle='-')
+                plt.title(str(noisefreq))
+                plt.show()
+            return noisefreq, thisfreqs, thisdata, threshfound
 
-def find_local_peaks(x, threshold):
-    """
-    Find local peaks in a 1D array that exceed a given threshold.
-    
-    Args:
-    x (np.array): 1D input array
-    threshold (float): Threshold for peak detection
-    
-    Returns:
-    np.array: Indices of detected peaks
-    """
-    # Compute first order difference
-    dx = np.diff(x)
-    
-    # Find where the derivative changes sign and exceeds the threshold
-    peaks = np.where((np.hstack([dx, 0]) < 0) & 
-                     (np.hstack([0, dx]) > 0) & 
-                     (x > threshold))[0]
-    
-    return peaks
+        detected = detectednew
+
+    if verbose:
+        print("\nnone found.")
+    return noisefreq, thisfreqs, thisdata, threshfound
