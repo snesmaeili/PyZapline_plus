@@ -2,25 +2,29 @@
 import mne
 import numpy as np
 import matplotlib
-matplotlib.use('TkAgg')  # Or 'Qt5Agg', 'Qt4Agg', depending on your system
+matplotlib.use('Qt5Agg')  # Or 'Qt5Agg', 'Qt4Agg', depending on your system
 import matplotlib.pyplot as plt
 import os
 from pyzaplineplus import zapline_plus
 
 # Load the EEGLAB .set file
-eeglab_set_file = 'pyZapline_plus/data/P01_noRAC_slowWalk_basic_prepared.set'
-raw = mne.io.read_raw_eeglab(eeglab_set_file, preload=True)
-
+# eeglab_set_file = 'pyZapline_plus/data/synthetic_eeg_raw.set.set'
+# raw = mne.io.read_raw_eeglab(eeglab_set_file, preload=True)
+raw = mne.io.read_raw_fif('synthetic_eeg_raw.fif', preload=True)
 # Set channel montage (uncomment if you have a valid montage file)
 # montage = mne.channels.read_custom_montage('pyZapline_plus/data/channel_locations.elc')
 # raw.set_montage(montage, on_missing='ignore')
 
 # Preprocess the data
-raw.filter(l_freq=1.0, h_freq=None)  # High-pass filter to remove slow drifts
-raw.resample(sfreq=250)  # Downsample to reduce computational load
+# raw.filter(l_freq=1.0, h_freq=None)  # High-pass filter to remove slow drifts
+# raw.resample(sfreq=250)  # Downsample to reduce computational load
+# new_sampling_rate = 200  # Target sampling rate
+# raw.resample(new_sampling_rate)
 
 # Extract data and info
-data = raw.get_data()
+data_volts = raw.get_data()
+data = data_volts * 1e6  # Convert from Volts to microvolts
+# Resample to match EEGLAB's sampling frequency (200 Hz)
 sfreq = raw.info['sfreq']
 
 # Add artificial line noise at 60 Hz and 70 Hz to all channels
