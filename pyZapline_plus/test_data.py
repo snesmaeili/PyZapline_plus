@@ -2,7 +2,7 @@
 import mne
 import numpy as np
 import matplotlib
-matplotlib.use('Qt5Agg')  # Or 'Qt5Agg', 'Qt4Agg', depending on your system
+# matplotlib.use('Qt5Agg')  # Or 'Qt5Agg', 'Qt4Agg', depending on your system
 import matplotlib.pyplot as plt
 import os
 from pyzaplineplus import zapline_plus
@@ -63,7 +63,7 @@ fig_after.savefig(os.path.join('pyZapline_plus', 'after_cleaning.png'))
 for fig in plot_handles:
     if fig:  # Ensure the figure is not None
         fig.show()
-        plt.show(block=True)  # Force the display of the plot
+        plt.show(block=False)  # Force the display of the plot
 
 # Quantitative comparison
 line_freq = 50  # Adjust if your line noise is at 60 Hz
