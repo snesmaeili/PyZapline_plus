@@ -105,7 +105,8 @@ class PyZaplinePlus:
         nperseg = int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate)
         noverlap = int(0.5 * nperseg)  # 50% overlap to match MATLAB's default behavior
 
-        f, pxx = signal.welch(data, fs=self.sampling_rate,
+        f, pxx = signal.welch(data, 
+                            fs=self.sampling_rate,
                             window=windows.hann(nperseg,sym=True),
                             nperseg=nperseg,
                             noverlap=noverlap, axis=0)
@@ -447,37 +448,39 @@ class PyZaplinePlus:
             plt.show()
 
         return clean_chunk, nremove, scores
-    def compute_analytics(self, pxx_raw, pxx_clean, f, noise_freq):
+    def compute_analytics(self, pxx_raw_log, pxx_clean_log, f, noise_freq):
         """
         Compute analytics to evaluate the cleaning process.
         """
         # Overall power removed (in log space)
-        proportion_removed = 1 - 10 ** ((np.mean(pxx_clean) - np.mean(pxx_raw)) / 10)
+        proportion_removed = 1 - 10 ** ((np.mean(pxx_clean_log) - np.mean(pxx_raw_log)) / 10)
 
         # Frequency range to evaluate below noise frequency
         freq_idx_below_noise = (f >= max(noise_freq - 11, 0)) & (f <= noise_freq - 1)
-        proportion_removed_below_noise = (
-            1 - 10 ** ((np.mean(pxx_clean[freq_idx_below_noise]) - np.mean(pxx_raw[freq_idx_below_noise])) / 10)
+        proportion_removed_below_noise = 1 - 10 ** (
+            (np.mean(pxx_clean_log[freq_idx_below_noise, :]) - np.mean(pxx_raw_log[freq_idx_below_noise, :])) / 10
         )
 
         # Frequency range at noise frequency
         freq_idx_noise = (f > noise_freq + self.config['detailedFreqBoundsUpper'][0]) & \
-                         (f < noise_freq + self.config['detailedFreqBoundsUpper'][1])
-        proportion_removed_noise = (
-            1 - 10 ** ((np.mean(pxx_clean[freq_idx_noise]) - np.mean(pxx_raw[freq_idx_noise])) / 10)
+                        (f < noise_freq + self.config['detailedFreqBoundsUpper'][1])
+        proportion_removed_noise = 1 - 10 ** (
+            (np.mean(pxx_clean_log[freq_idx_noise, :]) - np.mean(pxx_raw_log[freq_idx_noise, :])) / 10
         )
 
         # Ratio of noise power to surroundings before and after cleaning
         freq_idx_noise_surrounding = (
-            (f > noise_freq - (self.config['detectionWinsize'] / 2)) &
-            (f < noise_freq - (self.config['detectionWinsize'] / 6))
-        ) | (
-            (f > noise_freq + (self.config['detectionWinsize'] / 6)) &
-            (f < noise_freq + (self.config['detectionWinsize'] / 2))
+            ((f > noise_freq - (self.config['detectionWinsize'] / 2)) & (f < noise_freq - (self.config['detectionWinsize'] / 6))) |
+            ((f > noise_freq + (self.config['detectionWinsize'] / 6)) & (f < noise_freq + (self.config['detectionWinsize'] / 2)))
         )
 
-        ratio_noise_raw = 10 ** ((np.mean(pxx_raw[freq_idx_noise]) - np.mean(pxx_raw[freq_idx_noise_surrounding])) / 10)
-        ratio_noise_clean = 10 ** ((np.mean(pxx_clean[freq_idx_noise]) - np.mean(pxx_clean[freq_idx_noise_surrounding])) / 10)
+        mean_pxx_raw_noise = np.mean(pxx_raw_log[freq_idx_noise, :])
+        mean_pxx_raw_noise_surrounding = np.mean(pxx_raw_log[freq_idx_noise_surrounding, :])
+        ratio_noise_raw = 10 ** ((mean_pxx_raw_noise - mean_pxx_raw_noise_surrounding) / 10)
+
+        mean_pxx_clean_noise = np.mean(pxx_clean_log[freq_idx_noise, :])
+        mean_pxx_clean_noise_surrounding = np.mean(pxx_clean_log[freq_idx_noise_surrounding, :])
+        ratio_noise_clean = 10 ** ((mean_pxx_clean_noise - mean_pxx_clean_noise_surrounding) / 10)
 
         return {
             'proportion_removed': proportion_removed,
@@ -486,6 +489,7 @@ class PyZaplinePlus:
             'ratio_noise_raw': ratio_noise_raw,
             'ratio_noise_clean': ratio_noise_clean
         }
+
     def bandpass_filter(self, data, lowcut, highcut, fs, order=5):
         """
         Apply a bandpass filter to the data.
@@ -499,35 +503,92 @@ class PyZaplinePlus:
     # def compute_analytics(self, pxx_raw, pxx_clean, f, noise_freq):
     #     pass
 
-    def adaptive_cleaning(self, clean_data, raw_data, noise_freq):
+    def adaptive_cleaning(self, clean_data, raw_data, noise_freq,zapline_config):
         """
         Adjust the cleaning process if it was too weak or too strong.
         """
-        f, pxx_clean = signal.welch(clean_data, fs=self.sampling_rate, 
-                                    nperseg=int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate),
-                                    axis=0)
+        from scipy.signal import windows
+
+        # Compute the PSD of the clean data
+        nperseg = int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate)
+        noverlap = int(0.5 * nperseg)  # 50% overlap
+
+        f, pxx_clean = signal.welch(
+            clean_data,
+            fs=self.sampling_rate,
+            window=windows.hann(nperseg, sym=True),
+            nperseg=nperseg,
+            noverlap=noverlap,
+            axis=0
+        )
         pxx_clean_log = 10 * np.log10(pxx_clean)
-        
-        freq_idx_upper = (f > noise_freq + self.config['detailedFreqBoundsUpper'][0]) & \
-                         (f < noise_freq + self.config['detailedFreqBoundsUpper'][1])
-        freq_idx_lower = (f > noise_freq + self.config['detailedFreqBoundsLower'][0]) & \
-                         (f < noise_freq + self.config['detailedFreqBoundsLower'][1])
-        
-        # Determine if the cleaning is too weak or too strong
-        upper_thresh = np.mean(pxx_clean_log[freq_idx_upper, :])
-        lower_thresh = np.mean(pxx_clean_log[freq_idx_lower, :])
-        
-        if upper_thresh > self.config['maxProportionAboveUpper']:
-            # Cleaning was too weak, adjust
-            self.config['noiseCompDetectSigma'] = min(self.config['noiseCompDetectSigma'] + 0.25, self.config['maxsigma'])
-            return False, self.config
-        elif lower_thresh < self.config['maxProportionBelowLower']:
-            # Cleaning was too strong, adjust
-            self.config['noiseCompDetectSigma'] = max(self.config['noiseCompDetectSigma'] - 0.25, self.config['minsigma'])
-            return False, self.config
-        
-        return True, self.config
-    # Helper methods to implement equivalent of MATLAB functions in Python
+
+        # Determine center power by checking lower and upper third around noise frequency
+        detectionWinsize = zapline_config['detectionWinsize']
+        freq_range = (f > noise_freq - (detectionWinsize / 2)) & (f < noise_freq + (detectionWinsize / 2))
+        this_fine_data = np.mean(pxx_clean_log[freq_range, :], axis=1)
+
+        # Calculate thirds of the data
+        third = int(np.round(len(this_fine_data) / 3))
+        if third == 0:
+            third = 1  # Ensure at least one sample
+
+        indices = np.concatenate((np.arange(0, third), np.arange(2 * third, len(this_fine_data))))
+        center_this_data = np.mean(this_fine_data[indices])
+
+        # Measure of variation using lower quantile
+        mean_lower_quantile = np.mean([
+            np.quantile(this_fine_data[0:third], 0.05),
+            np.quantile(this_fine_data[2 * third:], 0.05)
+        ])
+
+        # Compute thresholds
+        freq_detect_mult_fine = zapline_config['freqDetectMultFine']
+        remaining_noise_thresh_upper = center_this_data + freq_detect_mult_fine * (center_this_data - mean_lower_quantile)
+        remaining_noise_thresh_lower = center_this_data - freq_detect_mult_fine * (center_this_data - mean_lower_quantile)
+
+        # Frequency indices for upper and lower checks
+        freq_idx_upper_check = (f > noise_freq + zapline_config['detailedFreqBoundsUpper'][0]) & \
+                            (f < noise_freq + zapline_config['detailedFreqBoundsUpper'][1])
+        freq_idx_lower_check = (f > noise_freq + zapline_config['detailedFreqBoundsLower'][0]) & \
+                            (f < noise_freq + zapline_config['detailedFreqBoundsLower'][1])
+
+        # Proportions for cleaning assessment
+        proportion_above_upper = np.sum(
+            np.mean(pxx_clean_log[freq_idx_upper_check, :], axis=1) > remaining_noise_thresh_upper
+        ) / np.sum(freq_idx_upper_check)
+        cleaning_too_weak = proportion_above_upper > zapline_config['maxProportionAboveUpper']
+        if cleaning_too_weak: 
+            print(f"Cleaning too weak! ")
+        proportion_below_lower = np.sum(
+            np.mean(pxx_clean_log[freq_idx_lower_check, :], axis=1) < remaining_noise_thresh_lower
+        ) / np.sum(freq_idx_lower_check)
+        cleaning_too_strong = proportion_below_lower > zapline_config['maxProportionBelowLower']
+
+        # Adjust cleaning parameters based on the assessment
+        cleaning_done = True
+        if zapline_config['adaptiveNremove'] and zapline_config['adaptiveSigma']:
+            if cleaning_too_strong and zapline_config['noiseCompDetectSigma'] < zapline_config['maxsigma']:
+                zapline_config['noiseCompDetectSigma'] = min(
+                    zapline_config['noiseCompDetectSigma'] + 0.25,
+                    zapline_config['maxsigma']
+                )
+                cleaning_done = False
+                zapline_config['fixedNremove'] = max(zapline_config['fixedNremove'] - 1, zapline_config['fixedNremove'])
+                print(f"Cleaning too strong! Increasing sigma for noise component detection to {zapline_config['noiseCompDetectSigma']} "
+                    f"and setting minimum number of removed components to {zapline_config['fixedNremove']}.")
+            elif cleaning_too_weak and not cleaning_too_strong and zapline_config['noiseCompDetectSigma'] > zapline_config['minsigma']:
+                zapline_config['noiseCompDetectSigma'] = max(
+                    zapline_config['noiseCompDetectSigma'] - 0.25,
+                    zapline_config['minsigma']
+                )
+                cleaning_done = False
+                zapline_config['fixedNremove'] += 1
+                print(f"Cleaning too weak! Reducing sigma for noise component detection to {zapline_config['noiseCompDetectSigma']} "
+                    f"and setting minimum number of removed components to {zapline_config['fixedNremove']}.")
+
+        return cleaning_done, zapline_config
+
 
 
     def nt_smooth(self, x, T, n_iterations=1, nodelayflag=False):
@@ -878,23 +939,6 @@ class PyZaplinePlus:
             else:
                 raise ValueError(f"Input data has unsupported number of dimensions: {data.ndim}")
 
-            # Handle weights
-            if w is not None:
-                if isinstance(w, list):
-                    raise TypeError("For numeric `x`, weights `w` should be a numpy.ndarray, not a list.")
-                if data.ndim == 1 or data.ndim == 2:
-                    if w.ndim != 1:
-                        raise ValueError("For 1D or 2D `x`, weights `w` must be a 1D array.")
-                    w = w[:, np.newaxis]  # Shape: (n_samples, 1)
-                elif data.ndim == 3:
-                    if w.ndim != 2:
-                        w=w.reshape(-1,1)
-                        # raise ValueError("For 3D `x`, weights `w` must be a 2D array.")
-                    # Reshape w to (n_samples * nshifts, 1, n_trials) if necessary
-                    # However, shifts will be handled in the loop
-                else:
-                    raise ValueError("Unsupported data dimensionality for weights handling.")
-
             # Preallocate covariance matrix
             c = np.zeros((n_channels * nshifts, n_channels * nshifts), dtype=np.float64)
 
@@ -1066,6 +1110,11 @@ class PyZaplinePlus:
                 - c: cross-covariance matrix.
                 - tw: total weight.
         """
+        if x.ndim == 2 and y.ndim == 2:
+            n_old_dim=2
+            x=x[:,:,np.newaxis]
+            y=y[:,:,np.newaxis]
+            w=w[:,:,np.newaxis]
         if shifts is None:
             shifts = np.array([0])
         else:
@@ -1085,10 +1134,11 @@ class PyZaplinePlus:
                 raise ValueError("Arrays `x` and `y` must have the same number of dimensions.")
             if x.shape[0] != y.shape[0]:
                 raise ValueError("`x` and `y` must have the same number of time samples.")
-            if x.shape[2] != y.shape[2]:
-                raise ValueError("`x` and `y` must have the same number of trials.")
-            if w is not None and x.shape[2] != w.shape[2]:
-                raise ValueError("`x` and `w` must have the same number of trials.")
+            if x.ndim >2:
+                if x.shape[2] != y.shape[2]:
+                    raise ValueError("`x` and `y` must have the same number of trials.")
+                if w is not None and x.shape[2] != w.shape[2]:
+                    raise ValueError("`x` and `w` must have the same number of trials.")
         else:
             raise TypeError("`x` and `y` must both be either lists or numpy.ndarray types.")
 
@@ -1201,13 +1251,14 @@ class PyZaplinePlus:
                 raise ValueError("Arrays `x` and `y` must have the same number of dimensions.")
             if x.shape[0] != y.shape[0]:
                 raise ValueError("`x` and `y` must have the same number of time samples.")
-            if x.shape[2] != y.shape[2]:
-                raise ValueError("`x` and `y` must have the same number of trials.")
-            if w is not None:
-                if not isinstance(w, np.ndarray):
-                    raise TypeError("Weights `w` must be a numpy.ndarray if `x` and `y` are numpy.ndarray types.")
-                if w.shape[0] != x.shape[0] or w.shape[2] != x.shape[2]:
-                    raise ValueError("`w` must have the same number of time samples and trials as `x`.")
+            if x.ndim > 2:
+                if x.shape[2] != y.shape[2]:
+                    raise ValueError("`x` and `y` must have the same number of trials.")
+                if w is not None:
+                    if not isinstance(w, np.ndarray):
+                        raise TypeError("Weights `w` must be a numpy.ndarray if `x` and `y` are numpy.ndarray types.")
+                    if w.shape[0] != x.shape[0] or w.shape[2] != x.shape[2]:
+                        raise ValueError("`w` must have the same number of time samples and trials as `x`.")
 
             mx, nx, ox = x.shape
             my, ny, oy = y.shape
@@ -1267,7 +1318,7 @@ class PyZaplinePlus:
                     tw += x_truncated.shape[0]  # Number of samples
 
                 # Accumulate cross-covariance
-                c += np.dot(x_truncated.T, y_shifted[:,np.newaxis])  # Shape: (n_channels_x, n_channels_y * nshifts)
+                c += np.dot(x_truncated.T, y_shifted)  # Shape: (n_channels_x, n_channels_y * nshifts)
 
         else:
             raise TypeError("`x` and `y` must both be either lists or numpy.ndarray types.")
@@ -1447,8 +1498,8 @@ class PyZaplinePlus:
         else:
             shifts = np.asarray(shifts)
             
-        x = np.atleast_3d(x)  # Shape: (time, channels, trials) or (time, channels, 1)
-        ref = np.atleast_3d(ref)
+        # x = np.atleast_3d(x)  # Shape: (time, channels, trials) or (time, channels, 1)
+        # ref = np.atleast_3d(ref)
         
         if wx is not None and wx.ndim == 2:
             wx = wx[:, np.newaxis, :]
@@ -1462,8 +1513,9 @@ class PyZaplinePlus:
         # Check argument values for sanity
         if x.shape[0] != ref.shape[0]:
             raise ValueError('x and ref should have the same number of time samples')
-        if x.shape[2] != ref.shape[2]:
-            raise ValueError('x and ref should have the same number of trials')
+        if x.ndim>=3:
+            if x.shape[2] != ref.shape[2]:
+                raise ValueError('x and ref should have the same number of trials')
         if wx is not None and (x.shape[0] != wx.shape[0] or x.shape[2] != wx.shape[2]):
             raise ValueError('x and wx should have matching dimensions')
         if wref is not None and (ref.shape[0] != wref.shape[0] or ref.shape[2] != wref.shape[2]):
@@ -1484,41 +1536,48 @@ class PyZaplinePlus:
         # Adjust x and ref to ensure that shifts are non-negative
         offset1 = max(0, -min(shifts))
         idx = np.arange(offset1, x.shape[0])
-        x = x[idx, :, :]  # Truncate x
+        x = x[idx, :]  # Truncate x
         if wx is not None:
-            wx = wx[idx, :, :]
+            wx = wx[idx, :]
         shifts = shifts + offset1  # Shifts are now non-negative
         
         # Adjust size of x
         offset2 = max(0, max(shifts))
         idx_ref = np.arange(0, ref.shape[0] - offset2)
-        x = x[:len(idx_ref), :, :]  # Part of x that overlaps with time-shifted refs
+        x = x[:len(idx_ref), :]  # Part of x that overlaps with time-shifted refs
         if wx is not None:
-            wx = wx[:len(idx_ref), :, :]
-        
-        mx, nx, ox = x.shape
-        mref, nref, oref = ref.shape
+            wx = wx[:len(idx_ref), :]
+        if x.ndim == 3:
+            mx, nx, ox = x.shape
+            mref, nref, oref = ref.shape
+        elif x.ndim == 2:
+            mx, nx = x.shape
+            ox = 1
+            mref, nref = ref.shape
+            oref=1
+        else:
+            raise ValueError('x should be 2D or 3D')
+       
         
         # Consolidate weights into a single weight matrix
-        w = np.zeros((mx, 1, oref))
+        w = np.zeros((mx, 1))
         if wx is None and wref is None:
             w[:] = 1
         elif wref is None:
             w = wx
         elif wx is None:
-            for k in range(ox):
-                wr = wref[:, :, k]
-                wr_shifted = self.nt_multishift(wr, shifts)
-                w[:, :, k] = np.min(wr_shifted, axis=1, keepdims=True)
+            wr = wref[:, :]
+            wr_shifted = self.nt_multishift(wr, shifts)
+            w[:, :] = np.min(wr_shifted, axis=1, keepdims=True)
         else:
-            for k in range(ox):
-                wr = wref[:, :, k]
-                wr_shifted = self.nt_multishift(wr, shifts)
-                w_min = np.min(wr_shifted, axis=1, keepdims=True)
-                w[:, :, k] = np.minimum(w_min, wx[:w_min.shape[0], :, k])
+
+            wr = wref[:, :]
+            wr_shifted = self.nt_multishift(wr, shifts)
+            w_min = np.min(wr_shifted, axis=1, keepdims=True)
+            w[:, :] = np.minimum(w_min, wx[:w_min.shape[0], :])
         wx = w
-        wref = np.zeros((mref, 1, oref))
-        wref[idx, :, :] = w
+        wref = np.zeros((mref, 1))
+        wref[idx, :] = w
         
         # Remove weighted means
         x0 = x.copy()
@@ -1541,10 +1600,10 @@ class PyZaplinePlus:
         
         # Clean x by removing regression on time-shifted refs
         y = np.zeros_like(x)
-        for k in range(ox):
-            ref_shifted = self.nt_multishift(ref[:, :, k], shifts)
-            z = ref_shifted[:,np.newaxis] @ r
-            y[:, :, k] = x[:z.shape[0], :, k] - z
+
+        ref_shifted = self.nt_multishift(ref[:, :], shifts)
+        z = ref_shifted @ r
+        y = x[:z.shape[0], :] - z
         
         y0 = y.copy()
         y_demeaned, _ = self.nt_demean(y, wx)  # Multishift(ref) is not necessarily zero mean
@@ -1556,7 +1615,7 @@ class PyZaplinePlus:
         w = wref
         
         # Return outputs
-        return y_demeaned[:,:,0], idx_output, w
+        return y_demeaned, idx_output, w
 
     def nt_mmat(self, x, m):
         """
@@ -1589,7 +1648,7 @@ class PyZaplinePlus:
             y = y.reshape(y_shape)
             return y
 
-        # If m is 2D, perform simple matrix multiplication using nt_mmat0
+        # If m is 2D, perform simple matrix multiplication using    
         if m.ndim == 2:
             y = self.nt_mmat0(x, m)
 
@@ -1657,7 +1716,7 @@ class PyZaplinePlus:
         """
         unfolded_x = self.nt_unfold(x)
         multiplied = unfolded_x @ m
-        epochsize = x.shape[0] if x.ndim == 2 else x.shape[0]  # Assuming epochsize is the first dimension
+        epochsize = x.shape[0]   # Assuming epochsize is the first dimension
         folded_y = self.nt_fold(multiplied, epochsize)
         return folded_y
 
@@ -1716,6 +1775,10 @@ class PyZaplinePlus:
             x_demeaned (np.ndarray): Demeaned data array.
             mn (np.ndarray): Mean values that were removed.
         """
+        if x.ndim == 2:
+            n_dim=2
+            x=x[:,:,np.newaxis]
+            w=w[:,:,np.newaxis]
         if w is not None and w.size < x.shape[0]:
             # Interpret w as array of indices to set to 1
             w_indices = w.flatten()
@@ -1749,7 +1812,9 @@ class PyZaplinePlus:
 
         x_demeaned = x_demeaned.reshape(m, n, o)
         mn = mn.reshape(1, n, o)
-
+        if n_dim == 2:
+            x_demeaned = x_demeaned.squeeze(-1)  # Remove the last dimension if singleton
+            mn = mn.squeeze(-1)
         return x_demeaned, mn
     def nt_normcol(self, x, w=None):
         """
@@ -1790,11 +1855,10 @@ class PyZaplinePlus:
                     raise ValueError('Weight matrix should have same number of time samples as data')
                 if w.ndim == 2 and w.shape[1] == 1:
                     w = np.tile(w, (1, n, o))
-                if w.shape != x.shape:
-                    raise ValueError('Weight should have same shape as data')
                 w_unfolded = w.reshape(m * o, n)
                 y_unfolded, N = self.nt_normcol(x_unfolded, w_unfolded)
             y = y_unfolded.reshape(m, n, o)
+            
             norms = np.sqrt(N)
             return y, norms
 
@@ -1835,7 +1899,7 @@ class PyZaplinePlus:
             r (np.ndarray): Regression matrix to apply to regressor to best model data.
         """
         # PCA of regressor covariance matrix
-        eigenvalues, topcs = self.nt_pcarot(cyy)
+        topcs,eigenvalues = self.nt_pcarot(cyy)
 
 
         # Discard negligible regressor PCs
@@ -1844,10 +1908,11 @@ class PyZaplinePlus:
             topcs = topcs[:, :keep]
             eigenvalues = eigenvalues[:keep]
 
-        if threshold is not None and threshold > 0:
-            idx_thresh = np.where(eigenvalues / np.max(eigenvalues) > threshold)[0]
-            topcs = topcs[idx_thresh]
-            eigenvalues = eigenvalues[idx_thresh]
+        # if threshold is not None and threshold > 0:
+        #     idx_thresh = np.where(eigenvalues / np.max(eigenvalues) > threshold)[0]
+        #     topcs = topcs[idx_thresh]
+        #     eigenvalues = eigenvalues[idx_thresh]
+        topcs, eigenvalues= self.normalize_topcs(eigenvalues, topcs, threshold)
 
         # Cross-covariance between data and regressor PCs
         cxy = cxy.T  # Transpose cxy to match dimensions
@@ -1859,7 +1924,52 @@ class PyZaplinePlus:
         # Projection matrix from regressors
         r = topcs @ r
 
-        return r.reshape(1,-1)
+        return r
+    def normalize_topcs(self, eigenvalues, topcs, threshold=None):
+        """
+        Normalize and select top principal components based on a threshold.
+
+        Parameters:
+            eigenvalues (np.ndarray): 1D array of eigenvalues.
+            topcs (np.ndarray): 2D array of top principal components (channels x PCs).
+            threshold (float, optional): Threshold value for selecting eigenvalues.
+
+        Returns:
+            topcs_normalized (np.ndarray): Normalized top principal components.
+            eigenvalues_selected (np.ndarray): Selected eigenvalues after thresholding.
+        """
+        if threshold is not None and threshold > 0:
+            # Ensure eigenvalues is 1D
+            if eigenvalues.ndim > 1:
+                eigenvalues = np.diag(eigenvalues)
+            
+            # Compute the ratio and create a boolean mask
+            ratio = eigenvalues / np.max(eigenvalues)
+            mask = ratio > threshold  # Boolean array
+            
+            # Debug statements (optional)
+            # print(f"Eigenvalues: {eigenvalues}")
+            # print(f"Max Eigenvalue: {np.max(eigenvalues)}")
+            # print(f"Threshold: {threshold}")
+            # print(f"Ratio: {ratio}")
+            # print(f"Mask: {mask}")
+            
+            # Select indices where the condition is True
+            idx_thresh = np.where(mask)[0]
+            
+            # Debug statement (optional)
+            # print(f"Selected indices: {idx_thresh}")
+            
+            # Select columns in topcs based on idx_thresh
+            topcs_selected = topcs[:,idx_thresh]
+            
+            # Select corresponding eigenvalues
+            eigenvalues_selected = eigenvalues[idx_thresh]
+            
+            return topcs_selected, eigenvalues_selected
+        else:
+            # If no threshold is provided, return the original arrays
+            return topcs, eigenvalues
     def nt_spect_plot(self, data, nfft, fs, return_data=False):
         """
         Compute and optionally plot the power spectrum of the data.
@@ -1908,48 +2018,310 @@ class PyZaplinePlus:
         full_clean_data[:, [i for i in range(full_clean_data.shape[1]) if i not in self.flat_channels]] = clean_data
 
         return full_clean_data    
-    def generate_output_figures(self, data, clean_data, noise_freq, zapline_config):
+    def generate_output_figures(self, data, clean_data, noise_freq, zapline_config, pxx_raw_log, pxx_clean_log, pxx_removed_log, f, analytics):
         """
-        Generate figures to visualize the results.
+        Generate figures to visualize the results, replicating the MATLAB figures with the same colors.
         """
-        f, pxx_raw = signal.welch(data, fs=self.sampling_rate, nperseg=int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate), axis=0)
-        f, pxx_clean = signal.welch(clean_data, fs=self.sampling_rate, nperseg=int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate), axis=0)
-        pxx_raw_log = 10 * np.log10(pxx_raw)
-        pxx_clean_log = 10 * np.log10(pxx_clean)
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
 
-        fig, axes = plt.subplots(3, 1, figsize=(20, 15))
+        # Colors
+        red = np.array([230, 100, 50]) / 256
+        green = np.array([0, 97, 100]) / 256
+        grey = np.array([0.2, 0.2, 0.2])
 
-        # Plot original power around noise frequency
+        # Prepare chunk indices for plotting
+        chunk_indices = zapline_config['chunkIndices'] 
+        if chunk_indices is None:
+            print("Error: 'chunkIndices' not provided in 'zapline_config'.")
+            return
+        chunk_indices=np.array(chunk_indices)
+        chunk_indices_plot = chunk_indices / self.sampling_rate / 60  # Convert to minutes
+
+        # Compute chunk_indices_plot_individual
+        chunk_indices_plot_individual = np.array([
+            np.mean([chunk_indices_plot[i], chunk_indices_plot[i+1]]) for i in range(len(chunk_indices_plot)-1)
+        ])
+
+        # Frequency index for plotting around the noise frequency
         this_freq_idx_plot = (f >= noise_freq - 1.1) & (f <= noise_freq + 1.1)
-        axes[0].plot(f[this_freq_idx_plot], np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1), color='gray', label='Original Power')
-        axes[0].set_title(f"Original Power Spectrum around {noise_freq} Hz")
-        axes[0].set_xlabel("Frequency (Hz)")
-        axes[0].set_ylabel("Power (10*log10 μV^2/Hz)")
-        axes[0].legend()
-        axes[0].grid(True)
 
-        # Plot number of components removed
-        axes[1].bar(range(len(zapline_config['nkeep'])), zapline_config['nkeep'], color='grey', alpha=0.5)
-        axes[1].set_title(f"Number of Removed Components at {noise_freq} Hz")
-        axes[1].set_xlabel("Chunk Index")
-        axes[1].set_ylabel("Number of Components Removed")
-        axes[1].grid(True)
+        # Create figure
+        fig = plt.figure(figsize=(20, 15))
+        plt.clf()
+        fig.patch.set_facecolor('white')
 
-        # Plot cleaned power around noise frequency
-        axes[2].plot(f[this_freq_idx_plot], np.mean(pxx_clean_log[this_freq_idx_plot, :], axis=1), color='green', label='Cleaned Power')
-        axes[2].set_title(f"Cleaned Power Spectrum around {noise_freq} Hz")
-        axes[2].set_xlabel("Frequency (Hz)")
-        axes[2].set_ylabel("Power (10*log10 μV^2/Hz)")
-        axes[2].legend()
-        axes[2].grid(True)
+        # Plot original power
+        ax1 = plt.subplot2grid((3, 30), (0, 0), colspan=5)
+        ax1.plot(f[this_freq_idx_plot], np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1), color=grey)
+        ax1.set_xlim([f[this_freq_idx_plot][0] - 0.01, f[this_freq_idx_plot][-1]])
+
+        # Y-axis limits
+        remaining_noise_thresh_lower = zapline_config.get('remaining_noise_thresh_lower', None)
+        remaining_noise_thresh_upper = zapline_config.get('remaining_noise_thresh_upper', None)
+        coarse_freq_detect_power_diff = zapline_config.get('coarseFreqDetectPowerDiff', None)
+        if remaining_noise_thresh_lower is not None and remaining_noise_thresh_upper is not None and coarse_freq_detect_power_diff is not None:
+            ylim_lower = remaining_noise_thresh_lower - 0.25 * (remaining_noise_thresh_upper - remaining_noise_thresh_lower)
+            ylim_upper = np.min(np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1)) + coarse_freq_detect_power_diff * 2
+            ax1.set_ylim([ylim_lower, ylim_upper])
+        else:
+            y_min = np.min(np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1))
+            y_max = np.max(np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1))
+            ax1.set_ylim([y_min - 0.25 * (y_max - y_min), y_max + 0.25 * (y_max - y_min)])
+
+        ax1.spines['top'].set_visible(False)
+        ax1.spines['right'].set_visible(False)
+        ax1.tick_params(labelsize=12)
+        ax1.set_xlabel('Frequency (Hz)')
+        ax1.set_ylabel('Power [10*log10 μV^2/Hz]')
+
+        # Automatic frequency detection
+        automatic_freq_detection = zapline_config.get('automaticFreqDetection', False)
+        thresh = zapline_config.get('thresh', None)
+        if automatic_freq_detection:
+            if thresh is not None:
+                ax1.plot(ax1.get_xlim(), [thresh, thresh], color=red)
+            ax1.set_title(['Detected frequency:', f'{noise_freq} Hz'])
+        else:
+            ax1.set_title(['Predefined frequency:', f'{noise_freq} Hz'])
+
+        # Plot number of removed components
+        pos = np.arange(8, 18)
+        ax2 = plt.subplot2grid((24, 60), (7, 0), rowspan=10, colspan=30)
+        ax2.cla()
+
+
+        NremoveFinal = zapline_config.get('NremoveFinal', None)
+        if NremoveFinal is None:
+            print("Error: 'NremoveFinal' not provided in 'zapline_config'.")
+            return
+
+        search_individual_noise = zapline_config.get('searchIndividualNoise', False)
+        found_noise = zapline_config.get('foundNoise', [True]*len(NremoveFinal))
+        nonoisehandle = None
+
+        for i_chunk in range(len(chunk_indices_plot)-1):
+            if (not search_individual_noise) or found_noise[i_chunk]:
+                # Plot grey fill
+                ax2.fill_between(
+                    [chunk_indices_plot[i_chunk], chunk_indices_plot[i_chunk+1]],
+                    0, NremoveFinal[i_chunk],
+                    color=grey,
+                    alpha=0.5
+                )
+            else:
+                # Plot green fill
+                nonoisehandle = ax2.fill_between(
+                    [chunk_indices_plot[i_chunk], chunk_indices_plot[i_chunk+1]],
+                    0, NremoveFinal[i_chunk],
+                    color=green,
+                    alpha=0.5
+                )
+
+        ax2.set_xlim([chunk_indices_plot[0], chunk_indices_plot[-1]])
+        ax2.set_ylim([0, max(NremoveFinal) + 1])
+        n_chunks = len(NremoveFinal)
+        ax2.set_title([f'# removed comps in {n_chunks} chunks, μ = {round(np.mean(NremoveFinal), 2)}'])
+        ax2.tick_params(labelsize=12)
+        ax2.spines['top'].set_visible(False)
+        ax2.spines['right'].set_visible(False)
+        ax2.set_xlabel('Time [minutes]')
+        ax2.set_ylabel('Number of Components Removed')
+
+        # Plot noise peaks
+        ax3 = plt.subplot2grid((48, 60), (pos[0] + 30*9, 0), rowspan=10, colspan=30)
+        ax3.cla()
+
+        noise_peaks = zapline_config.get('noisePeaks', None)
+        if noise_peaks is None:
+            print("Error: 'noisePeaks' not provided in 'zapline_config'.")
+            return
+
+        for i_chunk in range(len(chunk_indices_plot)-2):
+            ax3.plot(
+                [chunk_indices_plot[i_chunk+1], chunk_indices_plot[i_chunk+1]],
+                [0, 1000],
+                color=grey * 3
+            )
+
+        ax3.plot(chunk_indices_plot_individual, noise_peaks, color=grey)
+        ax3.set_xlim([chunk_indices_plot[0], chunk_indices_plot[-1]])
+        max_diff = max([(max(noise_peaks)) - noise_freq, noise_freq - (min(noise_peaks))])
+        if max_diff == 0:
+            max_diff = 0.01
+        ax3.set_ylim([noise_freq - max_diff * 1.5, noise_freq + max_diff * 1.5])
+        ax3.set_xlabel('Time [minutes]')
+        ax3.set_title(['Individual noise frequencies [Hz]'])
+        ax3.tick_params(labelsize=12)
+        ax3.spines['top'].set_visible(False)
+        ax3.spines['right'].set_visible(False)
+
+        if search_individual_noise:
+            found_noise_plot = np.array(found_noise, dtype=float)
+            found_noise_plot[found_noise_plot == 1] = np.nan
+            found_noise_plot[~np.isnan(found_noise_plot)] = noise_peaks[~np.isnan(found_noise_plot)]
+            ax3.plot(chunk_indices_plot_individual, found_noise_plot, 'o', color=green)
+
+            if nonoisehandle is not None:
+                ax3.legend([nonoisehandle], ['No clear noise peak found'], edgecolor=[0.8, 0.8, 0.8])
+
+        # Plot scores
+        ax4 = plt.subplot2grid((3, 30), (0, 18), colspan=5)
+        scores = zapline_config.get('scores', None)
+        if scores is None:
+            print("Error: 'scores' not provided in 'zapline_config'.")
+            return
+
+        ax4.plot(np.nanmean(scores, axis=0), color=grey)
+
+        mean_Nremove = np.mean(NremoveFinal) + 1
+        meanremovedhandle = ax4.plot([mean_Nremove, mean_Nremove], ax4.get_ylim(), color=red)
+        ax4.set_xlim([0.7, round(scores.shape[1] / 3)])
+        adaptive_nremove = zapline_config.get('adaptiveNremove', False)
+        noise_comp_detect_sigma = zapline_config.get('noiseCompDetectSigma', None)
+        if adaptive_nremove and noise_comp_detect_sigma is not None:
+            ax4.set_title(['Mean artifact scores [a.u.]', f'σ for detection = {noise_comp_detect_sigma}'])
+        else:
+            ax4.set_title('Mean artifact scores [a.u.]')
+        ax4.set_xlabel('Component')
+        ax4.tick_params(labelsize=12)
+        ax4.spines['top'].set_visible(False)
+        ax4.spines['right'].set_visible(False)
+        ax4.legend(['Mean removed'], edgecolor=[0.8, 0.8, 0.8])
+
+        # Plot new power
+        ax5 = plt.subplot2grid((3, 30), (0, 25), colspan=5)
+        ax5.plot(f[this_freq_idx_plot], np.mean(pxx_clean_log[this_freq_idx_plot, :], axis=1), color=green)
+        ax5.set_xlim([f[this_freq_idx_plot][0] - 0.01, f[this_freq_idx_plot][-1]])
+
+        # Plot thresholds
+        this_freq_idx_upper_check = zapline_config.get('thisFreqidxUppercheck', None)
+        this_freq_idx_lower_check = zapline_config.get('thisFreqidxLowercheck', None)
+        remaining_noise_thresh_upper = zapline_config.get('remaining_noise_thresh_upper', None)
+        remaining_noise_thresh_lower = zapline_config.get('remaining_noise_thresh_lower', None)
+        proportion_above_upper = zapline_config.get('proportion_above_upper', None)
+        proportion_below_lower = zapline_config.get('proportion_below_lower', None)
+
+        try:
+            if this_freq_idx_upper_check is not None and this_freq_idx_lower_check is not None:
+                l1, = ax5.plot(
+                    [f[np.where(this_freq_idx_upper_check)[0][0]], f[np.where(this_freq_idx_upper_check)[0][-1]]],
+                    [remaining_noise_thresh_upper, remaining_noise_thresh_upper],
+                    color=grey
+                )
+                l2, = ax5.plot(
+                    [f[np.where(this_freq_idx_lower_check)[0][0]], f[np.where(this_freq_idx_lower_check)[0][-1]]],
+                    [remaining_noise_thresh_lower, remaining_noise_thresh_lower],
+                    color=red
+                )
+                legend_labels = [
+                    f"{round(proportion_above_upper * 100, 2)}% above",
+                    f"{round(proportion_below_lower * 100, 2)}% below"
+                ]
+                ax5.legend([l1, l2], legend_labels, loc='upper center', edgecolor=[0.8, 0.8, 0.8])
+        except Exception as e:
+            print("Could not plot thresholds:", e)
+
+        # Y-axis limits
+        if remaining_noise_thresh_lower is not None and remaining_noise_thresh_upper is not None and coarse_freq_detect_power_diff is not None:
+            ylim_lower = remaining_noise_thresh_lower - 0.25 * (remaining_noise_thresh_upper - remaining_noise_thresh_lower)
+            ylim_upper = np.min(np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1)) + coarse_freq_detect_power_diff * 2
+            ax5.set_ylim([ylim_lower, ylim_upper])
+        else:
+            y_min = np.min(np.mean(pxx_clean_log[this_freq_idx_plot, :], axis=1))
+            y_max = np.max(np.mean(pxx_clean_log[this_freq_idx_plot, :], axis=1))
+            ax5.set_ylim([y_min - 0.25 * (y_max - y_min), y_max + 0.25 * (y_max - y_min)])
+
+        ax5.set_xlabel('Frequency (Hz)')
+        ax5.set_ylabel('Power [10*log10 μV^2/Hz]')
+        ax5.set_title('Cleaned spectrum')
+        ax5.tick_params(labelsize=12)
+        ax5.spines['top'].set_visible(False)
+        ax5.spines['right'].set_visible(False)
+
+
+        # Plot starting spectrum
+        pos = np.concatenate((np.arange(11, 15), np.arange(21, 25)))
+        ax6 = plt.subplot2grid((60, 10), (25, 1), rowspan=30, colspan=4)
+        ax6.cla()
+        meanhandles, = ax6.plot(f, np.mean(pxx_raw_log, axis=1), color=grey, linewidth=1.5)
+        ax6.grid(True, which='both', linestyle='--', linewidth=0.5)
+        ax6.tick_params(labelsize=12)
+        ax6.set_xlabel('Frequency')
+        ax6.set_ylabel('Power [10*log10 μV^2/Hz]')
+        ylimits1 = ax6.get_ylim()
+        ratio_noise_raw = analytics.get('ratio_noise_raw', None)
+        ax6.set_title([f'Noise frequency: {noise_freq} Hz', f'Ratio of noise to surroundings: {ratio_noise_raw}'])
+        ax6.spines['top'].set_visible(False)
+        ax6.spines['right'].set_visible(False)
+
+
+        # Plot removed and clean spectrum
+        ax7 = plt.subplot2grid((60, 10), (25, 5), rowspan=30, colspan=4)
+        removedhandle, = ax7.plot(f / noise_freq, np.mean(pxx_removed_log, axis=1), color=red, linewidth=1.5)
+        cleanhandle, = ax7.plot(f / noise_freq, np.mean(pxx_clean_log, axis=1), color=green, linewidth=1.5)
+        ax7.grid(True, which='both', linestyle='--', linewidth=0.5)
+        ax7.tick_params(labelsize=12)
+        ax7.set_xlabel('Frequency (relative to noise)')
+        ax7.set_ylabel('')
+        ylimits2 = ax7.get_ylim()
+        ylimits = [min(ylimits1[0], ylimits2[0]), max(ylimits1[1], ylimits2[1])]
+        ax6.set_ylim(ylimits)
+        ax7.set_ylim(ylimits)
+        ax6.set_xlim([np.min(f) - np.max(f) * 0.0032, np.max(f)])
+        ax7.set_xlim([np.min(f / noise_freq) - np.max(f / noise_freq) * 0.003, np.max(f / noise_freq)])
+        proportion_removed_noise = analytics.get('proportion_removed_noise', None)
+        ratio_noise_clean = analytics.get('ratio_noise_clean', None)
+        ax7.set_title([f'Removed power at noise frequency: {proportion_removed_noise * 100:.2f}%',
+                    f'Ratio of noise to surroundings: {ratio_noise_clean}'])
+        ax7.spines['top'].set_visible(False)
+        ax7.spines['right'].set_visible(False)
+
+        # Plot shaded min/max frequency areas
+        minfreq = self.config.get('minfreq', None)
+        maxfreq = self.config.get('maxfreq', None)
+        if minfreq is not None and maxfreq is not None:
+            # Shade areas in ax6
+            ax6.add_patch(Rectangle((0, ylimits[0]), minfreq, ylimits[1] - ylimits[0], color='black', alpha=0.1))
+            ax6.add_patch(Rectangle((maxfreq, ylimits[0]), f[-1] - maxfreq, ylimits[1] - ylimits[0], color='black', alpha=0.1))
+            # Shade areas in ax7
+            ax7.add_patch(Rectangle((0, ylimits[0]), minfreq / noise_freq, ylimits[1] - ylimits[0], color='black', alpha=0.1))
+            ax7.add_patch(Rectangle((maxfreq / noise_freq, ylimits[0]), (f[-1] / noise_freq) - (maxfreq / noise_freq),
+                                    ylimits[1] - ylimits[0], color='black', alpha=0.1))
+        ax6.legend([meanhandles], ['Raw data'], edgecolor=[0.8, 0.8, 0.8])
+        ax7.legend([cleanhandle, removedhandle], ['Clean data', 'Removed data'], edgecolor=[0.8, 0.8, 0.8])
+
+        # Plot below noise
+        this_freq_idx_belownoise = (f >= max(noise_freq - 11, 0)) & (f <= noise_freq - 1)
+        ax8 = plt.subplot2grid((60, 40), (25, 0), rowspan=32, colspan=40)
+        ax8.plot(f[this_freq_idx_belownoise], np.mean(pxx_raw_log[this_freq_idx_belownoise, :], axis=1),
+                color=grey, linewidth=1.5)
+        ax8.plot(f[this_freq_idx_belownoise], np.mean(pxx_clean_log[this_freq_idx_belownoise, :], axis=1),
+                color=green, linewidth=1.5)
+        ax8.legend(['Raw data', 'Clean data'], edgecolor=[0.8, 0.8, 0.8])
+        ax8.grid(True, which='both', linestyle='--', linewidth=0.5)
+        ax8.tick_params(labelsize=12)
+        ax8.set_xlabel('Frequency')
+        ax8.spines['top'].set_visible(False)
+        ax8.spines['right'].set_visible(False)
+        ax8.set_xlim([np.min(f[this_freq_idx_belownoise]), np.max(f[this_freq_idx_belownoise])])
+        proportion_removed = analytics.get('proportion_removed', None)
+        proportion_removed_below_noise = analytics.get('proportion_removed_below_noise', None)
+        ax8.set_title([f'Removed of full spectrum: {proportion_removed * 100:.2f}%',
+                    f'Removed below noise: {proportion_removed_below_noise * 100:.2f}%'])
 
         plt.tight_layout()
+        plt.draw()
+        plt.savefig(os.path.join('pyZapline_plus', 'zapline_results.png'))
         return fig
+
+
     def run(self):
         
         self.finalize_inputs()
         
-        clean_data = self.data.copy()
+        
         zapline_config = self.config.copy()
         analytics_results = {}
         plot_handles = []
@@ -1962,18 +2334,20 @@ class PyZaplinePlus:
             else:
                 chunk_indices = self.adaptive_chunk_detection(noise_freq)
             
+            zapline_config['chunkIndices'] = chunk_indices
             n_chunks = len(chunk_indices) - 1
             print(f"{n_chunks} chunks will be created.")
-
+            
             cleaning_done = False
             while not cleaning_done:
+                clean_data = np.zeros_like(self.data)
                 scores = np.zeros((n_chunks, self.config['nkeep']))
                 n_remove_final = np.zeros(n_chunks)
                 noise_peaks = np.zeros(n_chunks)
                 found_noise = np.zeros(n_chunks)
 
                 for i_chunk in range(n_chunks):
-                    chunk = clean_data[chunk_indices[i_chunk]:chunk_indices[i_chunk+1], :]
+                    chunk = self.data[chunk_indices[i_chunk]:chunk_indices[i_chunk+1], :]
                     
                     if self.config['searchIndividualNoise']:
                         chunk_noise_freq = self.detect_chunk_noise(chunk, noise_freq)
@@ -1981,20 +2355,34 @@ class PyZaplinePlus:
                         chunk_noise_freq = noise_freq
 
                     clean_chunk, n_remove, chunk_scores = self.apply_zapline_to_chunk(chunk, chunk_noise_freq)
-                    # clean_data[chunk_indices[i_chunk]:chunk_indices[i_chunk+1], :] = clean_chunk
+                    clean_data[chunk_indices[i_chunk]:chunk_indices[i_chunk+1], :] = clean_chunk
                     
                     scores[i_chunk, :] = chunk_scores
                     n_remove_final[i_chunk] = n_remove
                     noise_peaks[i_chunk] = chunk_noise_freq
                     found_noise[i_chunk] = 1 if chunk_noise_freq != noise_freq else 0
 
-                pxx_clean, f = self.compute_spectrum(clean_data)
-                analytics = self.compute_analytics(self.pxx_raw_log, pxx_clean, f, noise_freq)
+                pxx_clean_log, f= self.compute_spectrum(clean_data)
+                # pxx_raw_log=   sel.compute_spectrum(self.data)
+                pxx_removed_log=self.compute_spectrum(self.data-clean_data)
                 
-                cleaning_done, zapline_config = self.adaptive_cleaning(clean_data, self.data, noise_freq)
+                analytics = self.compute_analytics(self.pxx_raw_log, pxx_clean_log,f , noise_freq)
+                cleaning_done, zapline_config = self.adaptive_cleaning(clean_data, self.data, noise_freq,zapline_config)
 
             if self.config['plotResults']:
-                plot_handle = self.generate_output_figures(self.data, clean_data, noise_freq, zapline_config)
+                pxx_removed_log, _ = self.compute_spectrum(self.data - clean_data)
+
+                plot_handle = self.generate_output_figures(
+                                                        data=self.data,
+                                                        clean_data=clean_data,
+                                                        noise_freq=noise_freq,
+                                                        zapline_config=zapline_config,
+                                                        pxx_raw_log=self.pxx_raw_log,
+                                                        pxx_clean_log=pxx_clean_log,
+                                                        pxx_removed_log=pxx_removed_log,
+                                                        f=f,
+                                                        analytics=analytics
+                                                        )                                           
                 if plot_handle:
                     plot_handles.append(plot_handle)
 
