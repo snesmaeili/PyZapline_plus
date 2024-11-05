@@ -3,7 +3,4 @@ pyZapline_plus/data/P01_noRAC_slowWalk_basic_prepared.set
 pyZapline_plus/data/test_joy_EEG.set
 pyZapline_plus/data/test_joy_EEG.fdt
 pyZapline_plus/data/channel_locations.elc
-pyZapline_plus/channel_locations.elc
-pyZapline_plus/channel_locations.elc:Zone.Identifier
-pyZapline_plus/test_joy_EEG.fdt
-pyZapline_plus/test_joy_EEG.set
+

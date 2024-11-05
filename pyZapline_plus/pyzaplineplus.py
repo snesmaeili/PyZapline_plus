@@ -7,7 +7,7 @@ from noise_detection import find_next_noisefreq
 from matplotlib import pyplot as plt
 import numpy as np
 from sklearn.decomposition import PCA
-
+from typing import Union, List, Optional, Tuple
 class PyZaplinePlus:
     def __init__(self, data, sampling_rate, **kwargs):
         self.data = data
@@ -19,8 +19,8 @@ class PyZaplinePlus:
             'adaptiveNremove': kwargs.get('adaptiveNremove', True),
             'fixedNremove': kwargs.get('fixedNremove', 1),
             'detectionWinsize': kwargs.get('detectionWinsize', 6),
-            'coarseFreqDetectPowerDiff': kwargs.get('coarseFreqDetectPowerDiff', 4),
-            'coarseFreqDetectLowerPowerDiff': kwargs.get('coarseFreqDetectLowerPowerDiff', 1.76),
+            'coarseFreqDetectPowerDiff': kwargs.get('coarseFreqDetectPowerDiff', 7),
+            'coarseFreqDetectLowerPowerDiff': kwargs.get('coarseFreqDetectLowerPowerDiff', 1.76091259055681),
             'searchIndividualNoise': kwargs.get('searchIndividualNoise', True),
             'freqDetectMultFine': kwargs.get('freqDetectMultFine', 2),
             'detailedFreqBoundsUpper': kwargs.get('detailedFreqBoundsUpper', [-0.05, 0.05]),
@@ -28,7 +28,7 @@ class PyZaplinePlus:
             'maxProportionAboveUpper': kwargs.get('maxProportionAboveUpper', 0.005),
             'maxProportionBelowLower': kwargs.get('maxProportionBelowLower', 0.005),
             'noiseCompDetectSigma': kwargs.get('noiseCompDetectSigma', 3),
-            'adaptiveSigma': kwargs.get('adaptiveSigma', True),
+            'adaptiveSigma': kwargs.get('adaptiveSigma', 1),
             'minsigma': kwargs.get('minsigma', 2.5),
             'maxsigma': kwargs.get('maxsigma', 5),  # Changed to 5
             'chunkLength': kwargs.get('chunkLength', 0),
@@ -105,8 +105,9 @@ class PyZaplinePlus:
         nperseg = int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate)
         noverlap = int(0.5 * nperseg)  # 50% overlap to match MATLAB's default behavior
 
-        f, pxx = signal.welch(data, fs=self.sampling_rate,
-                            window=windows.hann(nperseg),
+        f, pxx = signal.welch(data, 
+                            fs=self.sampling_rate,
+                            window=windows.hann(nperseg,sym=True),
                             nperseg=nperseg,
                             noverlap=noverlap, axis=0)
 
@@ -137,10 +138,11 @@ class PyZaplinePlus:
         Automatically detect noise frequencies in the data.
         """
         noise_freqs = []
+        threshs=[]
         current_minfreq = self.config['minfreq']
-        
+        self.config['automaticFreqDetection'] = True
         while True:
-            noisefreq, _, _, _ = find_next_noisefreq(
+            noisefreq, _, _, thresh = find_next_noisefreq(
                 self.pxx_raw_log,
                 self.f,
                 current_minfreq,
@@ -148,18 +150,19 @@ class PyZaplinePlus:
                 self.config['detectionWinsize'],
                 self.config['maxfreq'],
                 self.config['coarseFreqDetectLowerPowerDiff'],
-                verbose=True
+                verbose=False
             )
             
             if noisefreq is None:
                 break
             
             noise_freqs.append(noisefreq)
+            threshs.append(thresh)
             current_minfreq = noisefreq + self.config['detectionWinsize'] / 2
             
             if current_minfreq >= self.config['maxfreq']:
                 break
-        
+        self.config['thresh']=threshs     
         return noise_freqs
     def fixed_chunk_detection(self):
         """
@@ -172,37 +175,93 @@ class PyZaplinePlus:
         chunk_indices.append(len(self.data))
         return chunk_indices
 
-    def adaptive_chunk_detection(self):
+
+
+    def adaptive_chunk_detection(self,noise_freq):
         """
         Use covariance matrices to adaptively segment data into chunks.
         """
-        narrow_band_filtered = self.bandpass_filter(self.data, 
-                                                    self.config['minfreq'], 
-                                                    self.config['maxfreq'], 
-                                                    self.sampling_rate)
+        from scipy.signal import find_peaks
+        from scipy.spatial.distance import pdist
+        # 1. Bandpass Filter the Data
+        narrow_band_filtered = self.bandpass_filter(
+            self.data, 
+            noise_freq - self.config['detectionWinsize'] / 2, 
+            noise_freq + self.config['detectionWinsize'] / 2, 
+            self.sampling_rate
+        )
+        
+        # 2. Determine Segment Length and Number of Segments
         segment_length_samples = int(self.config['segmentLength'] * self.sampling_rate)
         n_segments = max(len(narrow_band_filtered) // segment_length_samples, 1)
         
-        # Compute covariance matrices for each segment
+        # 3. Compute Covariance Matrices for Each Segment
         covariance_matrices = []
         for i in range(n_segments):
             start_idx = i * segment_length_samples
             end_idx = (i + 1) * segment_length_samples if i != n_segments - 1 else len(narrow_band_filtered)
             segment = narrow_band_filtered[start_idx:end_idx, :]
-            cov_matrix = np.cov(segment, rowvar=False)
+            cov_matrix = np.cov(segment, rowvar=0)
             covariance_matrices.append(cov_matrix)
         
-        # Compute distances between consecutive covariance matrices
-        distances = [
-            np.sum(pdist(covariance_matrices[i] - covariance_matrices[i - 1])) / 2
-            for i in range(1, len(covariance_matrices))
-        ]
+        # 4. Compute Distances Between Consecutive Covariance Matrices
+        distances = []
+        for i in range(1, len(covariance_matrices)):
+            cov_diff = covariance_matrices[i] - covariance_matrices[i - 1]
+            # Flatten the covariance difference matrix
+            cov_diff_flat = cov_diff.flatten()
+            # Compute pairwise distances (Euclidean)
+            distance = np.linalg.norm(cov_diff_flat)
+            distances.append(distance)
+        distances = np.array(distances)
         
-        # Find peaks in distances to determine chunk boundaries
-        peaks, _ = find_peaks(distances, prominence=np.quantile(distances, self.config['prominenceQuantile']),
-                              distance=self.config['minChunkLength'] * self.sampling_rate)
-        chunk_indices = [0] + list((peaks + 1) * segment_length_samples) + [len(self.data)]
+        # 5. First Find Peaks to Obtain Prominences
+        initial_peaks, properties = find_peaks(distances,prominence=0)
+        prominences = properties['prominences']
+        
+        # 6. Determine Prominence Threshold Based on Quantile
+        if len(prominences) == 0:
+            prominence_threshold = np.inf  # No peaks found
+        else:
+            prominence_threshold = np.quantile(prominences, self.config['prominenceQuantile'])
+        
+        # 7. Second Find Peaks Using Prominence Threshold
+        min_peak_distance_segments = int(np.ceil(self.config['minChunkLength'] / self.config['segmentLength']))
+        peaks, _ = find_peaks(
+            distances,
+            prominence=prominence_threshold,
+            distance=min_peak_distance_segments
+        )
+        # 8. Create Final Chunk Indices
+        # Initialize with 0 (start of data)
+        chunk_indices = [0]
+        
+        # Calculate the end indices of the peaks in terms of samples
+        for peak in peaks:
+            # peak is the index in 'distances', corresponding to the boundary between segments
+            # So, the peak corresponds to the end of segment 'peak' and start of 'peak+1'
+            end_sample = (peak + 1) * segment_length_samples
+            chunk_indices.append(end_sample)
+        
+        # Append the end of data
+        chunk_indices.append(len(self.data))
+        
+        # 9. Ensure All Chunks Meet Minimum Length
+        min_length_samples = int(self.config['minChunkLength'] * self.sampling_rate)
+        
+        # Check the first chunk
+        if chunk_indices[1] - chunk_indices[0] < min_length_samples:
+            chunk_indices.pop(1)  # Remove the first peak
+        
+        # Check the last chunk
+        if chunk_indices[-1] - chunk_indices[-2] < min_length_samples:
+            chunk_indices.pop(-2)  # Remove the last peak
+        
+        # Sort and remove duplicates if any
+        chunk_indices = sorted(list(set(chunk_indices)))
+        
         return chunk_indices
+
     def detect_chunk_noise(self, chunk, noise_freq):
         """
         Detect noise frequency in a given chunk.
@@ -232,7 +291,7 @@ class PyZaplinePlus:
         """
         # Ensure self.config has all necessary default parameters
         config_defaults = {
-            'nfft': 128,
+            'nfft': 1024,
             'nkeep': None,
             'niterations': 1,
             'fig1': 100,
@@ -321,7 +380,7 @@ class PyZaplinePlus:
                 todss[:, :nremove]
             )
             # Project them out
-            projected_chunk = self.nt_tsr(
+            projected_chunk,_,_= self.nt_tsr(
                 residual_chunk,
                 line_components
             )
@@ -391,37 +450,39 @@ class PyZaplinePlus:
             plt.show()
 
         return clean_chunk, nremove, scores
-    def compute_analytics(self, pxx_raw, pxx_clean, f, noise_freq):
+    def compute_analytics(self, pxx_raw_log, pxx_clean_log, f, noise_freq):
         """
         Compute analytics to evaluate the cleaning process.
         """
         # Overall power removed (in log space)
-        proportion_removed = 1 - 10 ** ((np.mean(pxx_clean) - np.mean(pxx_raw)) / 10)
+        proportion_removed = 1 - 10 ** ((np.mean(pxx_clean_log) - np.mean(pxx_raw_log)) / 10)
 
         # Frequency range to evaluate below noise frequency
         freq_idx_below_noise = (f >= max(noise_freq - 11, 0)) & (f <= noise_freq - 1)
-        proportion_removed_below_noise = (
-            1 - 10 ** ((np.mean(pxx_clean[freq_idx_below_noise]) - np.mean(pxx_raw[freq_idx_below_noise])) / 10)
+        proportion_removed_below_noise = 1 - 10 ** (
+            (np.mean(pxx_clean_log[freq_idx_below_noise, :]) - np.mean(pxx_raw_log[freq_idx_below_noise, :])) / 10
         )
 
         # Frequency range at noise frequency
         freq_idx_noise = (f > noise_freq + self.config['detailedFreqBoundsUpper'][0]) & \
-                         (f < noise_freq + self.config['detailedFreqBoundsUpper'][1])
-        proportion_removed_noise = (
-            1 - 10 ** ((np.mean(pxx_clean[freq_idx_noise]) - np.mean(pxx_raw[freq_idx_noise])) / 10)
+                        (f < noise_freq + self.config['detailedFreqBoundsUpper'][1])
+        proportion_removed_noise = 1 - 10 ** (
+            (np.mean(pxx_clean_log[freq_idx_noise, :]) - np.mean(pxx_raw_log[freq_idx_noise, :])) / 10
         )
 
         # Ratio of noise power to surroundings before and after cleaning
         freq_idx_noise_surrounding = (
-            (f > noise_freq - (self.config['detectionWinsize'] / 2)) &
-            (f < noise_freq - (self.config['detectionWinsize'] / 6))
-        ) | (
-            (f > noise_freq + (self.config['detectionWinsize'] / 6)) &
-            (f < noise_freq + (self.config['detectionWinsize'] / 2))
+            ((f > noise_freq - (self.config['detectionWinsize'] / 2)) & (f < noise_freq - (self.config['detectionWinsize'] / 6))) |
+            ((f > noise_freq + (self.config['detectionWinsize'] / 6)) & (f < noise_freq + (self.config['detectionWinsize'] / 2)))
         )
 
-        ratio_noise_raw = 10 ** ((np.mean(pxx_raw[freq_idx_noise]) - np.mean(pxx_raw[freq_idx_noise_surrounding])) / 10)
-        ratio_noise_clean = 10 ** ((np.mean(pxx_clean[freq_idx_noise]) - np.mean(pxx_clean[freq_idx_noise_surrounding])) / 10)
+        mean_pxx_raw_noise = np.mean(pxx_raw_log[freq_idx_noise, :])
+        mean_pxx_raw_noise_surrounding = np.mean(pxx_raw_log[freq_idx_noise_surrounding, :])
+        ratio_noise_raw = 10 ** ((mean_pxx_raw_noise - mean_pxx_raw_noise_surrounding) / 10)
+
+        mean_pxx_clean_noise = np.mean(pxx_clean_log[freq_idx_noise, :])
+        mean_pxx_clean_noise_surrounding = np.mean(pxx_clean_log[freq_idx_noise_surrounding, :])
+        ratio_noise_clean = 10 ** ((mean_pxx_clean_noise - mean_pxx_clean_noise_surrounding) / 10)
 
         return {
             'proportion_removed': proportion_removed,
@@ -430,6 +491,7 @@ class PyZaplinePlus:
             'ratio_noise_raw': ratio_noise_raw,
             'ratio_noise_clean': ratio_noise_clean
         }
+
     def bandpass_filter(self, data, lowcut, highcut, fs, order=5):
         """
         Apply a bandpass filter to the data.
@@ -443,47 +505,131 @@ class PyZaplinePlus:
     # def compute_analytics(self, pxx_raw, pxx_clean, f, noise_freq):
     #     pass
 
-    def adaptive_cleaning(self, clean_data, raw_data, noise_freq):
+    def adaptive_cleaning(self, clean_data, raw_data, noise_freq,zapline_config,cleaning_too_strong_once):
         """
         Adjust the cleaning process if it was too weak or too strong.
         """
-        f, pxx_clean = signal.welch(clean_data, fs=self.sampling_rate, 
-                                    nperseg=int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate),
-                                    axis=0)
+        from scipy.signal import windows
+
+        # Compute the PSD of the clean data
+        nperseg = int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate)
+        noverlap = int(0.5 * nperseg)  # 50% overlap
+
+        f, pxx_clean = signal.welch(
+            clean_data,
+            fs=self.sampling_rate,
+            window=windows.hann(nperseg, sym=True),
+            nperseg=nperseg,
+            noverlap=noverlap,
+            axis=0
+        )
         pxx_clean_log = 10 * np.log10(pxx_clean)
+
+        # Determine center power by checking lower and upper third around noise frequency
+        detectionWinsize = zapline_config['detectionWinsize']
+        freq_range = (f > noise_freq - (detectionWinsize / 2)) & (f < noise_freq + (detectionWinsize / 2))
+        this_fine_data = np.mean(pxx_clean_log[freq_range, :], axis=1)
+
+        # Calculate thirds of the data
+        third = int(np.round(len(this_fine_data) / 3))
+        if third == 0:
+            third = 1  # Ensure at least one sample
+
+        indices = np.concatenate((np.arange(0, third), np.arange(2 * third, len(this_fine_data))))
+        center_this_data = np.mean(this_fine_data[indices])
+
+        # Measure of variation using lower quantile
+        mean_lower_quantile = np.mean([
+            np.quantile(this_fine_data[0:third], 0.05),
+            np.quantile(this_fine_data[2 * third:], 0.05)
+        ])
+
+        # Compute thresholds
+        freq_detect_mult_fine = zapline_config['freqDetectMultFine']
+        remaining_noise_thresh_upper = center_this_data + freq_detect_mult_fine * (center_this_data - mean_lower_quantile)
+        remaining_noise_thresh_lower = center_this_data - freq_detect_mult_fine * (center_this_data - mean_lower_quantile)
+        zapline_config['remaining_noise_thresh_upper'] = remaining_noise_thresh_upper
+        zapline_config['remaining_noise_thresh_lower'] = remaining_noise_thresh_lower
         
-        freq_idx_upper = (f > noise_freq + self.config['detailedFreqBoundsUpper'][0]) & \
-                         (f < noise_freq + self.config['detailedFreqBoundsUpper'][1])
-        freq_idx_lower = (f > noise_freq + self.config['detailedFreqBoundsLower'][0]) & \
-                         (f < noise_freq + self.config['detailedFreqBoundsLower'][1])
+        # Frequency indices for upper and lower checks
+        freq_idx_upper_check = (f > noise_freq + zapline_config['detailedFreqBoundsUpper'][0]) & \
+                            (f < noise_freq + zapline_config['detailedFreqBoundsUpper'][1])
+        freq_idx_lower_check = (f > noise_freq + zapline_config['detailedFreqBoundsLower'][0]) & \
+                            (f < noise_freq + zapline_config['detailedFreqBoundsLower'][1])
+                            
+        # Store frequency indices for plotting
+        zapline_config['thisFreqidxUppercheck'] = freq_idx_upper_check
+        zapline_config['thisFreqidxLowercheck'] = freq_idx_lower_check
         
-        # Determine if the cleaning is too weak or too strong
-        upper_thresh = np.mean(pxx_clean_log[freq_idx_upper, :])
-        lower_thresh = np.mean(pxx_clean_log[freq_idx_lower, :])
+        # Proportions for cleaning assessment
+        proportion_above_upper = np.sum(
+            np.mean(pxx_clean_log[freq_idx_upper_check, :], axis=1) > remaining_noise_thresh_upper
+        ) / np.sum(freq_idx_upper_check)
+        cleaning_too_weak = proportion_above_upper > zapline_config['maxProportionAboveUpper']
+        zapline_config['proportion_above_upper'] = proportion_above_upper
         
-        if upper_thresh > self.config['maxProportionAboveUpper']:
-            # Cleaning was too weak, adjust
-            self.config['noiseCompDetectSigma'] = min(self.config['noiseCompDetectSigma'] + 0.25, self.config['maxsigma'])
-            return False, self.config
-        elif lower_thresh < self.config['maxProportionBelowLower']:
-            # Cleaning was too strong, adjust
-            self.config['noiseCompDetectSigma'] = max(self.config['noiseCompDetectSigma'] - 0.25, self.config['minsigma'])
-            return False, self.config
-        
-        return True, self.config
-    # Helper methods to implement equivalent of MATLAB functions in Python
-    def nt_smooth(self, x, T, n_iterations):
+        if cleaning_too_weak: 
+            print(f"Cleaning too weak! ")
+        proportion_below_lower = np.sum(
+            np.mean(pxx_clean_log[freq_idx_lower_check, :], axis=1) < remaining_noise_thresh_lower
+        ) / np.sum(freq_idx_lower_check)
+        cleaning_too_strong = proportion_below_lower > zapline_config['maxProportionBelowLower']
+        zapline_config['proportion_below_lower'] = proportion_below_lower
+
+        # Adjust cleaning parameters based on the assessment
+        cleaning_done = True
+        if zapline_config['adaptiveNremove'] and zapline_config['adaptiveSigma']:
+            if cleaning_too_strong and zapline_config['noiseCompDetectSigma'] < zapline_config['maxsigma']:
+                cleaning_too_strong_once = True
+                zapline_config['noiseCompDetectSigma'] = min(
+                    zapline_config['noiseCompDetectSigma'] + 0.25,
+                    zapline_config['maxsigma']
+                )
+                cleaning_done = False
+                zapline_config['fixedNremove'] = max(zapline_config['fixedNremove'] - 1, zapline_config['fixedNremove'])
+                print(f"Cleaning too strong! Increasing sigma for noise component detection to {zapline_config['noiseCompDetectSigma']} "
+                    f"and setting minimum number of removed components to {zapline_config['fixedNremove']}.")
+                return cleaning_done, zapline_config, cleaning_too_strong_once
+
+            elif cleaning_too_weak and not cleaning_too_strong_once and zapline_config['noiseCompDetectSigma'] > zapline_config['minsigma']:
+                zapline_config['noiseCompDetectSigma'] = max(
+                    zapline_config['noiseCompDetectSigma'] - 0.25,
+                    zapline_config['minsigma']
+                )
+                cleaning_done = False
+                zapline_config['fixedNremove'] += 1
+                print(f"Cleaning too weak! Reducing sigma for noise component detection to {zapline_config['noiseCompDetectSigma']} "
+                    f"and setting minimum number of removed components to {zapline_config['fixedNremove']}.")
+
+        return cleaning_done, zapline_config, cleaning_too_strong_once
+
+
+
+    def nt_smooth(self, x, T, n_iterations=1, nodelayflag=False):
         """
         Smooth the data by convolution with a square window.
+
+        Parameters:
+        x (numpy.ndarray): The input data to smooth. Shape: (samples, channels) or (samples, channels, ...)
+        T (float): The window size (can be fractional).
+        n_iterations (int): Number of iterations of smoothing (default is 1).
+        nodelayflag (bool): If True, compensate for delay introduced by filtering.
+
+        Returns:
+        numpy.ndarray: Smoothed data with the same shape as input.
         """
-        from scipy.ndimage import uniform_filter1d
+        from scipy.signal import lfilter
+
+        # Ensure x is at least 2D
+        if x.ndim < 2:
+            x = x[:, np.newaxis]
 
         # Split T into integer and fractional parts
         integ = int(np.floor(T))
         frac = T - integ
 
+        # If the window size exceeds data length, replace data with mean
         if integ >= x.shape[0]:
-            # If window size exceeds data length, replace with mean
             x = np.tile(np.mean(x, axis=0), (x.shape[0], 1))
             return x
 
@@ -491,22 +637,38 @@ class PyZaplinePlus:
         mn = np.mean(x[:integ + 1, :], axis=0)
         x = x - mn
 
-        # Smoothing iterations
-        for _ in range(n_iterations):
-            # Apply smoothing with integer part of the window size
-            if integ > 0:
-                x = uniform_filter1d(x, size=integ, axis=0)
+        if n_iterations == 1 and frac == 0:
+            # Faster convolution using cumulative sum (similar to MATLAB)
+            cumsum = np.cumsum(x, axis=0)
+            x[integ:, :] = (cumsum[integ:, :] - cumsum[:-integ, :]) / T
+        else:
+            # Construct the initial filter kernel B
+            B = np.concatenate((np.ones(integ), [frac])) / T
 
-            # Apply additional fractional smoothing if needed
-            if frac > 0:
-                # Smooth using fractional part (weighted average of neighbors)
-                B = np.array([1 - frac, frac])
-                x = np.apply_along_axis(lambda m: np.convolve(m, B, mode='same'), axis=0, arr=x)
+            # Iteratively convolve B with [ones(integ), frac] / T for n_iterations-1 times
+            for _ in range(n_iterations - 1):
+                B = np.convolve(B, np.concatenate((np.ones(integ), [frac]))) / T
+
+            # Apply the filter using causal filtering (similar to MATLAB's filter)
+            # For multi-dimensional data, apply filter along the first axis (samples)
+            for channel in range(x.shape[1]):
+                x[:, channel] = lfilter(B, 1, x[:, channel])
 
         # Restore the mean value that was subtracted earlier
         x = x + mn
 
+        # Delay compensation if nodelayflag is set to True
+        if nodelayflag:
+            shift = int(round(T / 2 * n_iterations))
+            if shift > 0:
+                # Shift the data forward and pad the end with zeros
+                padding = np.zeros((shift, x.shape[1]))
+                x = np.vstack((x[shift:, :], padding))
+            else:
+                pass  # No shift needed
+
         return x
+
 
 
 
@@ -515,172 +677,458 @@ class PyZaplinePlus:
         Apply PCA with time shifts and retain a specified number of components.
 
         Parameters:
-        - x: data matrix (n_samples, n_channels)
+        - x: data matrix (n_samples, n_channels) or list of arrays for cell-like data
         - shifts: array of shifts to apply (default: [0])
         - nkeep: number of components to keep (default: all)
         - threshold: discard PCs with eigenvalues below this (default: 0)
         - w: weights (optional)
+            - If x is numeric: w can be 1D (n_samples,) or 2D (n_samples, n_channels)
+            - If x is a list: w should be a list of arrays matching x's structure
 
         Returns:
         - z: principal components
+            - If x is numeric: numpy.ndarray of shape (numel(idx), PCs, trials)
+            - If x is a list: list of numpy.ndarrays, each of shape (numel(idx), PCs)
         - idx: indices of x that map to z
         """
-        # Handling shifts and adjusting offsets
-        offset = max(0, -min(shifts))
-        shifts = [shift + offset for shift in shifts]  # Adjust shifts to make them nonnegative
+
+        # Ensure shifts is a numpy array
+        shifts = np.array(shifts).flatten()
+        if len(shifts) == 0:
+            shifts = np.array([0])
+        if np.any(shifts < 0):
+            raise ValueError("All shifts must be non-negative.")
+
+        # Adjust shifts to make them non-negative
+        offset = max(0, -np.min(shifts))
+        shifts = shifts + offset
         idx = offset + np.arange(x.shape[0] - max(shifts))  # x[idx] maps to z
+        # Determine if x is numeric or list (cell-like)
+        if isinstance(x, list):
+            o = len(x)
+            if o == 0:
+                raise ValueError("Input list 'x' is empty.")
+            m, n = x[0].shape
+            if w is not None and not isinstance(w, list):
+                raise ValueError("Weights 'w' must be a list when 'x' is a list.")
+            tw = 0
+            # Compute covariance
+            c, tw = self.nt_cov(x, shifts, w)
+        elif isinstance(x, np.ndarray):
+            if x.ndim not in [2, 3]:
+                raise ValueError("Input 'x' must be a 2D or 3D numpy.ndarray or a list of 2D arrays.")
+            m, n = x.shape[:2]
+            o = x.shape[2] if x.ndim == 3 else 1
+            c, tw = self.nt_cov(x, shifts, w)
+        else:
+            raise TypeError("Input 'x' must be a numpy.ndarray or a list of numpy.ndarrays.")
 
-        # Time-shifting the data
-        x_shifted = self.nt_multishift(x, shifts)
+        # Perform PCA
+        topcs, evs = self.nt_pcarot(c, nkeep, threshold)
 
-        # Covariance calculation
-        if w is not None:
-            x_shifted = x_shifted * w[:, np.newaxis]
-        cov_matrix = np.cov(x_shifted, rowvar=False)
-
-        # PCA decomposition
-        eigvals, eigvecs = np.linalg.eigh(cov_matrix)
-        sorted_indices = np.argsort(eigvals)[::-1]
-        eigvals = eigvals[sorted_indices]
-        eigvecs = eigvecs[:, sorted_indices]
-
-        # Apply threshold to eigenvalues
-        if threshold > 0:
-            valid_indices = eigvals > threshold
-            eigvals = eigvals[valid_indices]
-            eigvecs = eigvecs[:, valid_indices]
-
-        # Retain specified number of components
-        if nkeep is not None and nkeep < len(eigvals):
-            eigvals = eigvals[:nkeep]
-            eigvecs = eigvecs[:, :nkeep]
-
-        # Project the shifted data onto the principal components
-        z = np.dot(x_shifted, eigvecs)
+        # Apply PCA matrix to time-shifted data
+        if isinstance(x, list):
+            z = []
+            for k in range(o):
+                shifted = self.nt_multishift(x[k], shifts)  # Shape: (numel(idx), n * nshifts)
+                # Project onto PCA components
+                z_k = np.dot(shifted, topcs)
+                z.append(z_k)
+        elif isinstance(x, np.ndarray):
+            if x.ndim == 2:
+                shifted = self.nt_multishift(x, shifts)  # Shape: (numel(idx), n * nshifts)
+                z = shifted @ topcs # Shape: (numel(idx), PCs)
+            elif x.ndim == 3:
+                z = np.zeros((len(idx), topcs.shape[1], o))
+                for k in range(o):
+                    shifted = self.nt_multishift(x[:, :, k], shifts)  # Shape: (numel(idx), n * nshifts)
+                    shifted = shifted.reshape(-1, 1)  # Shape becomes (18000, 1)
+                    z[:, :, k] = np.dot(shifted, topcs)  # Shape: (numel(idx), PCs)
+        else:
+            # This case should have been handled earlier
+            z = None
 
         return z, idx
 
+
+
     def nt_multishift(self,x, shifts):
+        """
+        Apply multiple shifts to a matrix.
+
+        Parameters:
+        x (numpy.ndarray): Input data to shift. Shape can be 1D, 2D, or 3D.
+                            - 1D: (samples,)
+                            - 2D: (samples, channels)
+                            - 3D: (samples, channels, trials)
+        shifts (array-like): Array of non-negative integer shifts.
+
+        Returns:
+        numpy.ndarray: Shifted data with increased channel dimension.
+                    - 1D input becomes 2D: (samples_shifted, shifts.size)
+                    - 2D input becomes 3D: (samples_shifted, channels * shifts.size, trials)
+        """
         x = np.asarray(x)
         shifts = np.asarray(shifts).flatten()
         nshifts = shifts.size
 
+        # Input validation
         if np.any(shifts < 0):
             raise ValueError('Shifts should be non-negative')
         if x.shape[0] < np.max(shifts):
             raise ValueError('Shifts should be no larger than the number of time samples in x')
 
+        # Handle different input dimensions by expanding to 3D
         if x.ndim == 1:
-            x = x[:, np.newaxis, np.newaxis]  # (time, 1, 1)
+            x = x[:, np.newaxis, np.newaxis]  # (samples, 1, 1)
         elif x.ndim == 2:
-            x = x[:, :, np.newaxis]  # (time, channels, 1)
+            x = x[:, :, np.newaxis]  # (samples, channels, 1)
+        elif x.ndim > 3:
+            raise ValueError('Input data has more than 3 dimensions, which is not supported.')
 
-        m, n, o = x.shape
+        m, n, o = x.shape  # samples x channels x trials
 
+        # If only one shift and it's zero, return the original data
         if nshifts == 1 and shifts[0] == 0:
-            return x.squeeze()
+            return x.squeeze(axis=-1)
 
         max_shift = np.max(shifts)
-        N = m - max_shift
+        N = m - max_shift  # Number of samples after shifting
 
         # Initialize output array
         z = np.empty((N, n * nshifts, o), dtype=x.dtype)
 
-        # Create shifted versions and concatenate
         for trial in range(o):
-            x_trial = x[:, :, trial]  # (m, n)
-            shifted_data = []
-            for shift in shifts:
-                shifted_slice = x_trial[shift:shift + N, :]
-                shifted_data.append(shifted_slice)
-            # Concatenate shifted data along the channel axis
-            shifted_data = np.concatenate(shifted_data, axis=1)  # (N, n * nshifts)
-            z[:, :, trial] = shifted_data
+            for channel in range(n):
+                y = x[:, channel, trial]  # (samples,)
+                for s_idx, shift in enumerate(shifts):
+                    if shift == 0:
+                        shifted_y = y[:N]
+                    else:
+                        shifted_y = y[shift:shift + N]
+                    # Place the shifted data in the correct position
+                    z[:, channel * nshifts + s_idx, trial] = shifted_y
 
-        return z.squeeze()
+        return z.squeeze(axis=-1)
 
 
-    def nt_cov(self, x, shifts, w=None):
+
+
+
+    def nt_cov(
+        self,
+        x: Union[np.ndarray, List[np.ndarray]],
+        shifts: Union[List[int], np.ndarray]=0,
+        w: Optional[Union[np.ndarray, List[np.ndarray]]] = None
+    ) -> Tuple[np.ndarray, float]:
         """
         Calculate time-shifted covariance of the data.
 
         Parameters:
-        - x: data matrix (n_samples, n_channels)
-        - shifts: array of shifts to apply
-        - w: weights (optional)
+            x (Union[np.ndarray, List[np.ndarray]]): Data matrix or list of matrices.
+                - If numeric:
+                    - 1D: (n_samples,)
+                    - 2D: (n_samples, n_channels)
+                    - 3D: (n_samples, n_channels, n_trials)
+                - If list: list of 2D numpy arrays (cell array equivalent).
+            shifts (Union[List[int], np.ndarray]): Array-like of non-negative integer shifts.
+            w (Optional[Union[np.ndarray, List[np.ndarray]]]): Weights (optional).
+                - If numeric:
+                    - 1D array for 1D or 2D `x`.
+                    - 2D array for 3D `x`.
+                - If list: list of weight matrices corresponding to each cell.
 
         Returns:
-        - c: covariance matrix
-        - tw: total weight
+            Tuple[np.ndarray, float]: Covariance matrix and total weight.
+                - c: covariance matrix (numpy.ndarray) with shape (n_channels * nshifts, n_channels * nshifts).
+                - tw: total weight (float).
         """
+        # Convert shifts to a NumPy array and flatten to 1D
+        shifts = np.asarray(shifts).flatten()
+        if np.any(shifts < 0):
+            raise ValueError("Shifts must be non-negative integers.")
         nshifts = len(shifts)
-        x_shifted = self.nt_multishift(x, shifts)
 
-        if w is None:
-            # No weights
-            c = np.dot(x_shifted.T, x_shifted)
-            tw = x_shifted.shape[0]
+        # Validate input data is not empty
+        if x is None or (isinstance(x, np.ndarray) and x.size == 0) or (isinstance(x, list) and len(x) == 0):
+            raise ValueError("Input data `x` is empty.")
+
+        # Initialize covariance matrix and total weight
+        c = None
+        tw = 0.0
+
+        # Determine if input is a list (cell array) or numpy array
+        if isinstance(x, list):
+            # Handle list input (cell array equivalent)
+            if w is not None and not isinstance(w, list):
+                raise ValueError("Weights `w` must be a list if `x` is a list (cell array).")
+            
+            o = len(x)  # Number of cells/trials
+            # Determine number of channels
+            if len(x) == 0:
+                raise ValueError("Input list `x` is empty.")
+            first_shape = x[0].shape
+            if first_shape == ():
+                n_channels = 1
+            elif x[0].ndim == 1:
+                n_channels = 1
+            elif x[0].ndim == 2:
+                n_channels = x[0].shape[1]
+            else:
+                raise ValueError(f"Data in cell {0} has unsupported number of dimensions: {x[0].ndim}")
+
+            c = np.zeros((n_channels * nshifts, n_channels * nshifts), dtype=np.float64)
+
+            for idx, data in enumerate(x):
+                # Validate data dimensions
+                if not isinstance(data, np.ndarray):
+                    raise TypeError(f"Element {idx} of input list `x` is not a numpy.ndarray.")
+                if data.ndim != 2:
+                    raise ValueError(f"Data in cell {idx} must be 2D, got {data.ndim}D.")
+                n_samples, n_channels_current = data.shape
+                if n_channels_current != n_channels:
+                    raise ValueError(f"All cells must have the same number of channels. Cell {idx} has {n_channels_current} channels, expected {n_channels}.")
+
+                # Handle weights
+                if w is not None:
+                    weight = w[idx]
+                    if not isinstance(weight, np.ndarray):
+                        raise TypeError(f"Weight for cell {idx} must be a numpy.ndarray.")
+                    if weight.size == 0:
+                        raise ValueError(f"Weight for cell {idx} is empty.")
+                    if weight.ndim == 1:
+                        weight = weight[:, np.newaxis]  # Shape: (n_samples, 1)
+                    elif weight.ndim == 2 and weight.shape[1] == 1:
+                        pass  # Shape is already (n_samples, 1)
+                    else:
+                        raise ValueError(f"Weight for cell {idx} must be 1D or 2D with a single column. Got shape {weight.shape}.")
+                # Apply shifts
+                if not np.all(shifts == 0):
+                    xx = self.nt_multishift(data, shifts)  # Shape: (n_samples * nshifts, n_channels)
+                    if w is not None:
+                        ww = self.nt_multishift(weight, shifts)  # Shape: (n_samples * nshifts, 1)
+                        # Take the minimum weight across shifts for each sample
+                        ww_min = np.min(ww, axis=1, keepdims=True)  # Shape: (n_samples * nshifts, 1)
+                    else:
+                        ww_min = np.ones((xx.shape[0], 1), dtype=np.float64)
+                else:
+                    xx = data.copy()  # Shape: (n_samples, n_channels)
+                    if w is not None:
+                        ww_min = weight.copy()  # Shape: (n_samples, 1)
+                    else:
+                        ww_min = np.ones((xx.shape[0], 1), dtype=np.float64)
+
+                # Multiply each row by its corresponding weight
+                if w is not None:
+                    xx = self.nt_vecmult(xx, ww_min)  # Shape: (time_shifted x channels)
+                
+                # Accumulate covariance
+                c += np.dot(xx.T, xx)  # Shape: (n_channels * nshifts, n_channels * nshifts)
+
+                # Accumulate total weight
+                if w is not None:
+                    if not np.all(shifts == 0):
+                        tw += np.sum(ww_min)
+                    else:
+                        tw += np.sum(weight)
+                else:
+                    tw += xx.shape[0]  # Number of samples
+
+        elif isinstance(x, np.ndarray):
+            # Handle NumPy array input
+            data = x.copy()
+            original_shape = data.shape
+
+            # Determine data dimensionality
+            if data.ndim == 1:
+                data = data[:, np.newaxis]  # Shape: (n_samples, 1)
+                n_channels = 1
+                n_trials = 1
+            elif data.ndim == 2:
+                n_channels = data.shape[1]
+                n_trials = 1
+            elif data.ndim == 3:
+                n_channels = data.shape[1]
+                n_trials = data.shape[2]
+            else:
+                raise ValueError(f"Input data has unsupported number of dimensions: {data.ndim}")
+
+            # Preallocate covariance matrix
+            c = np.zeros((n_channels * nshifts, n_channels * nshifts), dtype=np.float64)
+
+            # Iterate over trials
+            for trial in range(n_trials):
+                if data.ndim == 3:
+                    trial_data = data[:, :, trial]  # Shape: (n_samples, n_channels)
+                    if w is not None:
+                        trial_weight = w[:, trial]  # Shape: (n_samples,)
+                else:
+                    trial_data = data.copy()  # Shape: (n_samples, n_channels)
+                    if w is not None:
+                        trial_weight = w.copy()  # Shape: (n_samples, 1)
+
+                # Apply shifts
+                if not np.all(shifts == 0):
+                    xx = self.nt_multishift(trial_data, shifts)  # Shape: (n_samples * nshifts, n_channels)
+                    if w is not None:
+                        ww = self.nt_multishift(trial_weight, shifts)  # Shape: (n_samples * nshifts, 1)
+                        # Take the minimum weight across shifts for each sample
+                        ww_min = np.min(ww, axis=1, keepdims=True)  # Shape: (n_samples * nshifts, 1)
+                    else:
+                        ww_min = np.ones((xx.shape[0], 1), dtype=np.float64)
+                else:
+                    xx = trial_data.copy()  # Shape: (n_samples, n_channels)
+                    if w is not None:
+                        ww_min = trial_weight.copy()  # Shape: (n_samples, 1)
+                    else:
+                        ww_min = np.ones((xx.shape[0], 1), dtype=np.float64)
+
+                # Multiply each row by its corresponding weight
+                if w is not None:
+                    xx = self.nt_vecmult(xx, ww_min)  # Shape: (time_shifted x channels)
+
+                # Accumulate covariance
+                c += np.dot(xx.T, xx)  # Shape: (n_channels * nshifts, n_channels * nshifts)
+
+                # Accumulate total weight
+                if w is not None:
+                    if not np.all(shifts == 0):
+                        tw += np.sum(ww_min)
+                    else:
+                        tw += np.sum(trial_weight)
+                else:
+                    tw += xx.shape[0]  # Number of samples
+
         else:
-            # Apply weights
-            w = w[:, np.newaxis] if w.ndim == 1 else w
-            x_shifted = x_shifted * w
-            c = np.dot(x_shifted.T, x_shifted)
-            tw = np.sum(w)
+            raise TypeError("Input `x` must be a numpy.ndarray or a list of numpy.ndarray (cell array).")
 
         return c, tw
 
+
+    def nt_vecmult(self, xx: np.ndarray, ww: np.ndarray) -> np.ndarray:
+        """
+        Multiply each row of 'xx' by the corresponding weight in 'ww'.
+
+        Parameters:
+            xx (np.ndarray): Data array (time_shifted x channels).
+            ww (np.ndarray): Weights array (time_shifted x 1).
+
+        Returns:
+            weighted_xx (np.ndarray): Weighted data (time_shifted x channels).
+        """
+        # Ensure that 'ww' is a column vector
+        if ww.ndim == 1:
+            ww = ww[:, np.newaxis]
+        elif ww.ndim == 2 and ww.shape[1] != 1:
+            raise ValueError("Weights 'ww' must have a single column or be a 1D array.")
+        
+        # Element-wise multiplication with broadcasting
+        weighted_xx = xx * ww  # Shape: (time_shifted x channels)
+        return weighted_xx
     def nt_pcarot(self, cov, nkeep=None, threshold=None, N=None):
         """
         Calculate PCA rotation matrix from covariance matrix.
 
         Parameters:
-        - cov: covariance matrix
-        - nkeep: number of components to keep (optional)
-        - threshold: discard components below this threshold (optional)
-        - N: eigs' K parameter (optional)
+        - cov (numpy.ndarray): Covariance matrix (symmetric, positive semi-definite).
+        - nkeep (int, optional): Number of principal components to keep.
+        - threshold (float, optional): Discard components with eigenvalues below this fraction of the largest eigenvalue.
+        - N (int, optional): Number of top eigenvalues and eigenvectors to compute.
 
         Returns:
-        - topcs: PCA rotation matrix
-        - eigenvalues: PCA eigenvalues
+        - topcs (numpy.ndarray): PCA rotation matrix (eigenvectors), shape (n_features, n_components).
+        - eigenvalues (numpy.ndarray): PCA eigenvalues, shape (n_components,).
         """
+        from scipy.sparse.linalg import eigsh
+        from scipy.linalg import eigh
+        from numpy.linalg import eig
+        # Validate covariance matrix
+        if not isinstance(cov, np.ndarray):
+            raise TypeError("Covariance matrix 'cov' must be a numpy.ndarray.")
+        if cov.ndim != 2 or cov.shape[0] != cov.shape[1]:
+            raise ValueError("Covariance matrix 'cov' must be a square (2D) array.")
+
+        n_features = cov.shape[0]
+
+        # Compute eigenvalues and eigenvectors
         if N is not None:
-            eigvals, eigvecs = np.linalg.eigh(cov)
+            if not isinstance(N, int) or N <= 0:
+                raise ValueError("'N' must be a positive integer.")
+            N = min(N, n_features)
+            eigenvalues_all, eigenvectors_all = eigsh(cov, k=N, which='LM')  # 'LM' selects largest magnitude eigenvalues
+            # Ensure real parts
+            eigenvalues_all = np.real(eigenvalues_all)
+            eigenvectors_all = np.real(eigenvectors_all)
         else:
-            eigvals, eigvecs = np.linalg.eigh(cov)
+            eigenvalues_all, eigenvectors_all = eigh(cov)
+            # Ensure real parts
+            eigenvalues_all = np.real(eigenvalues_all)
+            eigenvectors_all = np.real(eigenvectors_all)
+            # Reverse to descending order
+            eigenvalues_all = eigenvalues_all[::-1]
+            eigenvectors_all = eigenvectors_all[:, ::-1]
+            # Filter out negative eigenvalues
+            eigenvalues_all=np.abs(eigenvalues_all)
+            # positive_idx = eigenvalues_all > 0
+            # eigenvalues_all = eigenvalues_all[positive_idx]
+            # eigenvectors_all = eigenvectors_all[:, positive_idx]
 
-        eigvecs = np.real(eigvecs)
-        eigvals = np.real(eigvals)
-        sorted_indices = np.argsort(eigvals)[::-1]
-        eigvals = eigvals[sorted_indices]
-        eigvecs = eigvecs[:, sorted_indices]
+        # Define a small tolerance to handle numerical precision issues (optional)
 
-        # Apply threshold to eigenvalues
+
+        # Select top N eigenvalues and eigenvectors if N is specified and not already done
+        if N is None:
+            eigenvalues = eigenvalues_all
+            eigenvectors = eigenvectors_all
+        else:
+            eigenvalues = eigenvalues_all
+            eigenvectors = eigenvectors_all
+
+        # Apply threshold
         if threshold is not None:
-            valid_indices = eigvals / eigvals[0] > threshold
-            eigvals = eigvals[valid_indices]
-            eigvecs = eigvecs[:, valid_indices]
+            if eigenvalues[0] == 0:
+                raise ValueError("The largest eigenvalue is zero; cannot apply threshold.")
+            valid_indices = np.where(eigenvalues / eigenvalues[0] > threshold)[0]
+            eigenvalues = eigenvalues[valid_indices]
+            eigenvectors = eigenvectors[:, valid_indices]
 
-        # Retain specified number of components
+        # Apply nkeep
         if nkeep is not None:
-            nkeep = min(nkeep, len(eigvals))
-            eigvals = eigvals[:nkeep]
-            eigvecs = eigvecs[:, :nkeep]
+            if not isinstance(nkeep, int) or nkeep <= 0:
+                raise ValueError("'nkeep' must be a positive integer.")
+            nkeep = min(nkeep, eigenvectors.shape[1])
+            eigenvalues = eigenvalues[:nkeep]
+            eigenvectors = eigenvectors[:, :nkeep]
 
-        return eigvecs, eigvals
-    def nt_xcov(self,x, y, shifts=None, w=None):
+        topcs = eigenvectors
+        return topcs, eigenvalues
+
+    def nt_xcov(
+        self,
+        x: Union[np.ndarray, List[np.ndarray]],
+        y: Union[np.ndarray, List[np.ndarray]],
+        shifts: Optional[Union[List[int], np.ndarray]] = None,
+        w: Optional[Union[np.ndarray, List[np.ndarray]]] = None
+    ) -> Tuple[np.ndarray, float]:
         """
         Compute the cross-covariance of x and time-shifted y.
 
         Parameters:
-            x (np.ndarray): Data array x (time x channels x trials).
-            y (np.ndarray): Data array y (time x channels x trials).
-            shifts (np.ndarray): Array of non-negative integer time shifts (default: [0]).
-            w (np.ndarray): Optional weights array (time x 1 x trials) or (time x channels x trials).
+            x (Union[np.ndarray, List[np.ndarray]]): Data array x (time x channels x trials) or list of 2D arrays.
+            y (Union[np.ndarray, List[np.ndarray]]): Data array y (time x channels x trials) or list of 2D arrays.
+            shifts (Optional[Union[List[int], np.ndarray]]): Array of non-negative integer time shifts (default: [0]).
+            w (Optional[Union[np.ndarray, List[np.ndarray]]]): Optional weights array (time x 1 x trials) or (time x channels x trials).
 
         Returns:
-            c (np.ndarray): Cross-covariance matrix.
-            tw (float): Total weight.
+            Tuple[np.ndarray, float]: Cross-covariance matrix and total weight.
+                - c: cross-covariance matrix.
+                - tw: total weight.
         """
+        if x.ndim == 2 and y.ndim == 2:
+            n_old_dim=2
+            x=x[:,:,np.newaxis]
+            y=y[:,:,np.newaxis]
+            w=w[:,:,np.newaxis]
         if shifts is None:
             shifts = np.array([0])
         else:
@@ -689,84 +1137,300 @@ class PyZaplinePlus:
         if np.any(shifts < 0):
             raise ValueError('Shifts must be non-negative integers')
 
-        if w is not None and x.shape[0] != w.shape[0]:
-            raise ValueError('x and w should have the same number of time samples')
-        if x.shape[2] != y.shape[2]:
-            raise ValueError('x and y should have the same number of trials')
-        if w is not None and x.shape[2] != w.shape[2]:
-            raise ValueError('x and w should have the same number of trials')
+        # Validate dimensions
+        if isinstance(x, list) and isinstance(y, list):
+            if len(x) != len(y):
+                raise ValueError("Lists `x` and `y` must have the same length.")
+            if w is not None and not isinstance(w, list):
+                raise ValueError("Weights `w` must be a list if `x` and `y` are lists.")
+        elif isinstance(x, np.ndarray) and isinstance(y, np.ndarray):
+            if x.ndim != y.ndim:
+                raise ValueError("Arrays `x` and `y` must have the same number of dimensions.")
+            if x.shape[0] != y.shape[0]:
+                raise ValueError("`x` and `y` must have the same number of time samples.")
+            if x.ndim >2:
+                if x.shape[2] != y.shape[2]:
+                    raise ValueError("`x` and `y` must have the same number of trials.")
+                if w is not None and x.shape[2] != w.shape[2]:
+                    raise ValueError("`x` and `w` must have the same number of trials.")
+        else:
+            raise TypeError("`x` and `y` must both be either lists or numpy.ndarray types.")
 
         nshifts = shifts.size
-        mx, nx, ox = x.shape
-        my, ny, oy = y.shape
 
-        c = np.zeros((nx, ny * nshifts))
+        # Initialize covariance matrix and total weight
+        c = None
+        tw = 0.0
 
-        if w is not None:
-            x = x * w  # Broadcasting
+        # Handle list inputs (equivalent to cell arrays in MATLAB)
+        if isinstance(x, list):
+            if w is not None and not isinstance(w, list):
+                raise ValueError("Weights `w` must be a list if `x` is a list (cell array).")
 
-        for k in range(ox):
-            y_shifted = self.nt_multishift(y[:, :, k], shifts)  # Shape: (N, ny * nshifts)
-            x_truncated = x[:y_shifted.shape[0], :, k]     # Truncate x to match shifted y
-            c += x_truncated.T @ y_shifted  # Matrix multiplication
+            o = len(x)  # Number of cells/trials
+            if o == 0:
+                raise ValueError("Input list `x` is empty.")
+            
+            # Determine number of channels from the first cell
+            first_x_shape = x[0].shape
+            first_y_shape = y[0].shape
+            if x[0].ndim == 1:
+                n_channels_x = 1
+            elif x[0].ndim == 2:
+                n_channels_x = x[0].shape[1]
+            else:
+                raise ValueError(f"Data in cell 0 of `x` has unsupported number of dimensions: {x[0].ndim}")
 
-        if w is None:
-            tw = ox * y_shifted.shape[0]
+            if y[0].ndim == 1:
+                n_channels_y = 1
+            elif y[0].ndim == 2:
+                n_channels_y = y[0].shape[1]
+            else:
+                raise ValueError(f"Data in cell 0 of `y` has unsupported number of dimensions: {y[0].ndim}")
+
+            # Initialize cross-covariance matrix
+            c = np.zeros((n_channels_x, n_channels_y * nshifts), dtype=np.float64)
+
+            for idx in range(o):
+                data_x = x[idx]
+                data_y = y[idx]
+
+                # Validate data dimensions
+                if not isinstance(data_x, np.ndarray) or not isinstance(data_y, np.ndarray):
+                    raise TypeError(f"Elements in lists `x` and `y` must be numpy.ndarray types. Found types: {type(data_x)}, {type(data_y)} at index {idx}.")
+                if data_x.ndim != 2 or data_y.ndim != 2:
+                    raise ValueError(f"Data in lists `x` and `y` must be 2D arrays. Found dimensions: {data_x.ndim}, {data_y.ndim} at index {idx}.")
+
+                if data_x.shape[1] != n_channels_x:
+                    raise ValueError(f"All cells in `x` must have {n_channels_x} channels. Found {data_x.shape[1]} at index {idx}.")
+                if data_y.shape[1] != n_channels_y:
+                    raise ValueError(f"All cells in `y` must have {n_channels_y} channels. Found {data_y.shape[1]} at index {idx}.")
+
+                # Handle weights
+                if w is not None:
+                    weight = w[idx]
+                    if not isinstance(weight, np.ndarray):
+                        raise TypeError(f"Weight for cell {idx} must be a numpy.ndarray.")
+                    if weight.size == 0:
+                        raise ValueError(f"Weight for cell {idx} is empty.")
+                    if weight.ndim == 1:
+                        weight = weight[:, np.newaxis]  # Shape: (n_samples, 1)
+                    elif weight.ndim == 2 and weight.shape[1] == 1:
+                        pass  # Shape is already (n_samples, 1)
+                    else:
+                        raise ValueError(f"Weight for cell {idx} must be 1D or 2D with a single column. Got shape {weight.shape}.")
+
+                # Apply shifts to y
+                y_shifted = self.nt_multishift(data_y, shifts)  # Shape: (n_samples_shifted, n_channels_y * nshifts)
+
+                # Truncate x to match the shifted y's time dimension
+                if not np.all(shifts == 0):
+                    # Apply shifts to x if necessary (though MATLAB does not shift x in cross-covariance)
+                    # Assuming x is not shifted, only y is
+                    # Thus, truncate x to match the shifted y's number of samples
+                    x_truncated = data_x[:y_shifted.shape[0], :]  # Shape: (n_samples_shifted, n_channels_x)
+                else:
+                    x_truncated = data_x.copy()
+
+                # Handle weights: multiply x by w
+                if w is not None:
+                    # Unfold x and w, multiply, fold back
+                    x_weighted = self.nt_fold(
+                        self.nt_vecmult(
+                            self.nt_unfold(x_truncated), 
+                            self.nt_unfold(weight[:y_shifted.shape[0], :])
+                        ), 
+                        m=data_x.shape[0]
+                    )[:y_shifted.shape[0], :]  # Ensure matching time dimension
+                    x_truncated = x_weighted  # Shape: (n_samples_shifted, n_channels_x)
+
+                    # Update total weight
+                    if not np.all(shifts == 0):
+                        # Take minimum weight across shifts
+                        ww = self.nt_multishift(weight[:y_shifted.shape[0], :], shifts)  # Shape: (n_samples_shifted * nshifts, 1)
+                        ww_min = np.min(ww, axis=1, keepdims=True)
+                        tw += np.sum(ww_min)
+                    else:
+                        tw += np.sum(weight[:y_shifted.shape[0], :])
+                else:
+                    tw += x_truncated.shape[0]  # Number of samples
+
+                # Accumulate cross-covariance
+                c += np.dot(x_truncated.T, y_shifted)  # Shape: (n_channels_x, n_channels_y * nshifts)
+
+            # Handle NumPy array inputs
+        elif isinstance(x, np.ndarray) and isinstance(y, np.ndarray):
+            # Validate dimensions
+            if x.ndim != y.ndim:
+                raise ValueError("Arrays `x` and `y` must have the same number of dimensions.")
+            if x.shape[0] != y.shape[0]:
+                raise ValueError("`x` and `y` must have the same number of time samples.")
+            if x.ndim > 2:
+                if x.shape[2] != y.shape[2]:
+                    raise ValueError("`x` and `y` must have the same number of trials.")
+                if w is not None:
+                    if not isinstance(w, np.ndarray):
+                        raise TypeError("Weights `w` must be a numpy.ndarray if `x` and `y` are numpy.ndarray types.")
+                    if w.shape[0] != x.shape[0] or w.shape[2] != x.shape[2]:
+                        raise ValueError("`w` must have the same number of time samples and trials as `x`.")
+
+            mx, nx, ox = x.shape
+            my, ny, oy = y.shape
+
+            # Determine number of channels
+            n_channels_x = nx
+            n_channels_y = ny
+
+            # Initialize cross-covariance matrix
+            c = np.zeros((n_channels_x, n_channels_y * nshifts), dtype=np.float64)
+
+            for trial in range(ox):
+                data_x = x[:, :, trial]  # Shape: (n_samples, n_channels_x)
+                data_y = y[:, :, trial]  # Shape: (n_samples, n_channels_y)
+
+                # Apply shifts to y
+                y_shifted= self.nt_multishift(data_y, shifts)  # Shape: (n_samples_shifted, n_channels_y * nshifts)
+
+                # Truncate x to match the shifted y's time dimension
+                if not np.all(shifts == 0):
+                    # Assuming y is shifted, x is not; truncate x accordingly
+                    x_truncated = data_x[:y_shifted.shape[0], :]  # Shape: (n_samples_shifted, n_channels_x)
+                else:
+                    x_truncated = data_x.copy()
+
+                if w is not None:
+                    # Extract weights for this trial and truncate
+                    trial_weight = w[:, :, trial]  # Shape: (n_samples, channels or 1)
+                    # if w.ndim == 2:
+                    #     # For 3D `x`, weights are 2D (time x trials)
+                    #     trial_weight = trial_weight  # Shape: (n_samples, trials)
+                    # elif w.ndim == 1:
+                    #     # For 1D or 2D `x`, weights are 1D
+                    #     trial_weight = trial_weight[:, np.newaxis]  # Shape: (n_samples, 1)
+                    # else:
+                    #     raise ValueError(f"Unsupported weight dimensionality: {w.ndim}")
+
+                    # Unfold x and w, multiply, fold back
+                    x_weighted = self.nt_fold(
+                        self.nt_vecmult(
+                            self.nt_unfold(x_truncated), 
+                            self.nt_unfold(trial_weight[:y_shifted.shape[0], :])
+                        ), 
+                        mx
+                    )[:y_shifted.shape[0], :]  # Ensure matching time dimension
+
+                    x_truncated = x_weighted  # Shape: (n_samples_shifted, n_channels_x)
+
+                    if not np.all(shifts == 0):
+                        # Take minimum weight across shifts
+                        ww = self.nt_multishift(trial_weight[:y_shifted.shape[0], :], shifts)  # Shape: (n_samples_shifted * nshifts, 1)
+                        ww_min = np.min(ww, axis=1, keepdims=True)
+                        tw += np.sum(ww_min)
+                    else:
+                        tw += np.sum(trial_weight[:y_shifted.shape[0], :])
+                else:
+                    tw += x_truncated.shape[0]  # Number of samples
+
+                # Accumulate cross-covariance
+                c += np.dot(x_truncated.T, y_shifted)  # Shape: (n_channels_x, n_channels_y * nshifts)
+
         else:
-            w_truncated = w[:y_shifted.shape[0], :, :]
-            tw = np.sum(w_truncated)
+            raise TypeError("`x` and `y` must both be either lists or numpy.ndarray types.")
 
         return c, tw
 
 
-    def nt_bias_fft(self, x, freq, nfft):
+    def nt_bias_fft(self, x: np.ndarray, freq: np.ndarray, nfft: int) -> tuple:
+        """
+        Compute covariance matrices with and without filter bias using FFT.
+
+        Parameters:
+        - x (np.ndarray): Data matrix.
+            - 2D: (n_samples, n_channels)
+            - 3D: (n_samples, n_channels, n_trials)
+        - freq (np.ndarray): Normalized frequencies to retain.
+            - 1D array: Individual frequencies.
+            - 2D array: Frequency bands with two rows (start and end frequencies).
+        - nfft (int): FFT size.
+
+        Returns:
+        - c0 (np.ndarray): Unbiased covariance matrix.
+        - c1 (np.ndarray): Biased covariance matrix after applying the frequency filter.
+        """
         from scipy.fft import fft
         from scipy.signal import windows
 
-        """
-        Compute covariance with and without filter bias.
-        
-        Parameters:
-        - x: data matrix (n_samples, n_channels)
-        - freq: row vector of normalized frequencies to keep (relative to sample rate)
-        - nfft: FFT size
 
-        Returns:
-        - c0: unbiased covariance matrix
-        - c1: biased covariance matrix
-        """
+        # Input Validation
         if np.max(freq) > 0.5:
             raise ValueError("Frequencies should be <= 0.5")
         if nfft > x.shape[0]:
             raise ValueError("nfft too large")
 
+        # Initialize Filter
         filt = np.zeros(nfft // 2 + 1)
 
         if freq.ndim == 1:
             for k in range(freq.shape[0]):
                 idx = int(round(freq[k] * nfft + 0.5))
+                if idx >= len(filt):
+                    raise ValueError(f"Frequency index {idx} out of bounds for filter of length {len(filt)}.")
                 filt[idx] = 1
         elif freq.shape[0] == 2:
             for k in range(freq.shape[1]):
-                idx = slice(int(round(freq[0, k] * nfft + 0.5)), int(round(freq[1, k] * nfft + 0.5)) + 1)
-                filt[idx] = 1
+                start_idx = int(round(freq[0, k] * nfft + 0.5))
+                end_idx = int(round(freq[1, k] * nfft + 0.5)) + 1
+                if start_idx >= len(filt) or end_idx > len(filt):
+                    raise ValueError(f"Frequency slice [{start_idx}:{end_idx}] out of bounds for filter of length {len(filt)}.")
+                filt[start_idx:end_idx] = 1
         else:
             raise ValueError("freq should have one or two rows")
 
-        filt = np.concatenate([filt, np.flipud(filt[1:-1])])
-        w = windows.hann(nfft)
+        # Symmetrize the Filter
+        filt = np.concatenate([filt, np.flip(filt[1:-1])])
 
-        c0 = np.cov(x, rowvar=False)
+        # Hann Window
+        w = windows.hann(nfft,sym=False)
+
+        # Handle 2D and 3D Data
+        if x.ndim == 2:
+            n_samples, n_channels = x.shape
+            n_trials = 1
+            x = x[:, :, np.newaxis]  # Convert to 3D for uniform processing
+        elif x.ndim == 3:
+            n_samples, n_channels, n_trials = x.shape
+        else:
+            raise ValueError("Input data `x` must be 2D or 3D.")
+
+        # Compute c0: Unbiased Covariance Matrix
+        if n_trials > 1:
+            x_reshaped = x.reshape(n_samples, n_channels * n_trials)
+        else:
+            x_reshaped = x.reshape(n_samples, n_channels)
+        c0,_= self.nt_cov(x_reshaped)
+
+        # Ensure c0 is 2D
+        if c0.ndim == 0:
+            c0 = np.array([[c0]])
+        elif c0.ndim == 1:
+            c0 = np.atleast_2d(c0)
+
+        # Initialize c1: Biased Covariance Matrix
         c1 = np.zeros_like(c0)
 
-        nframes = int(np.ceil((x.shape[0] - nfft / 2) / (nfft / 2)))
-        for k in range(nframes):
-            idx = int(k * nfft // 2)
-            idx = min(idx, x.shape[0] - nfft)
-            z = x[idx:idx + nfft, :]
-            z = z * w[:, None]  # Apply Hann window
-            Z = fft(z, axis=0) * filt[:, None]
-            c1 += np.real(np.dot(Z.T, Z))
+        # Calculate Number of Frames
+        nframes = int(np.ceil((n_samples - nfft / 2) / (nfft / 2)))
+
+        for trial in range(n_trials):
+            for k in range(nframes):
+                idx = int(k * nfft // 2)
+                idx = min(idx, n_samples - nfft)
+                z = x[idx:idx + nfft, :, trial]  # (nfft, n_channels)
+                z = self.nt_vecmult(z,w)  # Apply Hann window
+                Z = fft(z, axis=0)   
+                Z=self.nt_vecmult(Z, filt)  # Apply filter
+                cov_matrix = np.real(np.dot(Z.conj().T, Z))  # (n_channels, n_channels)
+                c1 += cov_matrix
 
         return c0, c1
     def nt_dss0(self, c0, c1, keep1=None, keep2=10**-9):
@@ -802,12 +1466,13 @@ class PyZaplinePlus:
             topcs1 = topcs1[:, :keep1]
             evs1 = evs1[:keep1]
         if keep2 is not None:
-            idx = evs1 / np.max(evs1) > keep2
+            idx = np.where(evs1 > keep2)[0]  # Extract the first element from the tuple
             topcs1 = topcs1[:, idx]
             evs1 = evs1[idx]
 
         # Apply PCA and whitening to the biased covariance
-        N = np.diag(1.0 / np.sqrt(evs1))
+        evs1_sqrt=1.0 / np.sqrt(evs1)
+        N = np.diag(evs1_sqrt)
         c2 = N.T @ topcs1.T @ c1 @ topcs1 @ N
 
         # Matrix to convert PCA-whitened data to DSS
@@ -823,7 +1488,7 @@ class PyZaplinePlus:
         pwr1 = np.sqrt(np.sum((c1 @ todss) ** 2, axis=0))  # Biased
 
         return todss, pwr0, pwr1
-    def nt_tsr(self,x, ref, shifts=None, wx=None, wref=None, keep=None, thresh=1e-20):
+    def nt_tsr(self, x, ref, shifts=None, wx=None, wref=None, keep=None, thresh=1e-20):
         """
         Perform time-shift regression (TSPCA) to denoise data.
         
@@ -846,17 +1511,25 @@ class PyZaplinePlus:
             shifts = np.array([0])
         else:
             shifts = np.asarray(shifts)
+            
+        # x = np.atleast_3d(x)  # Shape: (time, channels, trials) or (time, channels, 1)
+        # ref = np.atleast_3d(ref)
         
         if wx is not None and wx.ndim == 2:
             wx = wx[:, np.newaxis, :]
+            wx = np.atleast_3d(wx)
         if wref is not None and wref.ndim == 2:
             wref = wref[:, np.newaxis, :]
+            wref = np.atleast_3d(wref)
         
+        # Ensure x and ref are at least 3D
+
         # Check argument values for sanity
         if x.shape[0] != ref.shape[0]:
             raise ValueError('x and ref should have the same number of time samples')
-        if x.shape[2] != ref.shape[2]:
-            raise ValueError('x and ref should have the same number of trials')
+        if x.ndim>=3:
+            if x.shape[2] != ref.shape[2]:
+                raise ValueError('x and ref should have the same number of trials')
         if wx is not None and (x.shape[0] != wx.shape[0] or x.shape[2] != wx.shape[2]):
             raise ValueError('x and wx should have matching dimensions')
         if wref is not None and (ref.shape[0] != wref.shape[0] or ref.shape[2] != wref.shape[2]):
@@ -877,70 +1550,78 @@ class PyZaplinePlus:
         # Adjust x and ref to ensure that shifts are non-negative
         offset1 = max(0, -min(shifts))
         idx = np.arange(offset1, x.shape[0])
-        x = x[idx, :, :]  # Truncate x
+        x = x[idx, :]  # Truncate x
         if wx is not None:
-            wx = wx[idx, :, :]
+            wx = wx[idx, :]
         shifts = shifts + offset1  # Shifts are now non-negative
         
         # Adjust size of x
         offset2 = max(0, max(shifts))
         idx_ref = np.arange(0, ref.shape[0] - offset2)
-        x = x[:len(idx_ref), :, :]  # Part of x that overlaps with time-shifted refs
+        x = x[:len(idx_ref), :]  # Part of x that overlaps with time-shifted refs
         if wx is not None:
-            wx = wx[:len(idx_ref), :, :]
-        
-        mx, nx, ox = x.shape
-        mref, nref, oref = ref.shape
+            wx = wx[:len(idx_ref), :]
+        if x.ndim == 3:
+            mx, nx, ox = x.shape
+            mref, nref, oref = ref.shape
+        elif x.ndim == 2:
+            mx, nx = x.shape
+            ox = 1
+            mref, nref = ref.shape
+            oref=1
+        else:
+            raise ValueError('x should be 2D or 3D')
+       
         
         # Consolidate weights into a single weight matrix
-        w = np.zeros((mx, 1, oref))
+        w = np.zeros((mx, 1))
         if wx is None and wref is None:
             w[:] = 1
         elif wref is None:
             w = wx
         elif wx is None:
-            for k in range(ox):
-                wr = wref[:, :, k]
-                wr_shifted = self.nt_multishift(wr, shifts)
-                w[:, :, k] = np.min(wr_shifted, axis=1, keepdims=True)
+            wr = wref[:, :]
+            wr_shifted = self.nt_multishift(wr, shifts)
+            w[:, :] = np.min(wr_shifted, axis=1, keepdims=True)
         else:
-            for k in range(ox):
-                wr = wref[:, :, k]
-                wr_shifted = self.nt_multishift(wr, shifts)
-                w_min = np.min(wr_shifted, axis=1, keepdims=True)
-                w[:, :, k] = np.minimum(w_min, wx[:w_min.shape[0], :, k])
+
+            wr = wref[:, :]
+            wr_shifted = self.nt_multishift(wr, shifts)
+            w_min = np.min(wr_shifted, axis=1, keepdims=True)
+            w[:, :] = np.minimum(w_min, wx[:w_min.shape[0], :])
         wx = w
-        wref = np.zeros((mref, 1, oref))
-        wref[idx, :, :] = w
+        wref = np.zeros((mref, 1))
+        wref[idx, :] = w
         
         # Remove weighted means
         x0 = x.copy()
-        x, _ = self.nt_demean(x, wx)
-        mn1 = x - x0
-        ref, _ = self.nt_demean(ref, wref)
+        x_demeaned, _ = self.nt_demean(x, wx)
+        mn1 = x_demeaned - x0
+        ref_demeaned, _ = self.nt_demean(ref, wref)
         
         # Equalize power of ref channels, then equalize power of ref PCs
-        ref = self.nt_normcol(ref, wref)
-        ref = self.nt_pca(ref, thresh=1e-6)
-        ref = self.nt_normcol(ref, wref)
+        ref_normalized, _ = self.nt_normcol(ref_demeaned, wref)
+        ref_pca, _ = self.nt_pca(ref_normalized, threshold=1e-6)
+        ref_normalized_pca, _ = self.nt_normcol(ref_pca, wref)
+        ref = ref_normalized_pca
         
         # Covariances and cross-covariance with time-shifted refs
         cref, twcref = self.nt_cov(ref, shifts, wref)
         cxref, twcxref = self.nt_xcov(x, ref, shifts, wx)
         
         # Regression matrix of x on time-shifted refs
-        r = self.nt_regcov(cxref / twcxref, cref / twcref, keep=keep, thresh=thresh)
+        r = self.nt_regcov(cxref / twcxref, cref / twcref, keep=keep, threshold=thresh)
         
         # Clean x by removing regression on time-shifted refs
         y = np.zeros_like(x)
-        for k in range(ox):
-            ref_shifted = self.nt_multishift(ref[:, :, k], shifts)
-            z = ref_shifted @ r
-            y[:, :, k] = x[:z.shape[0], :, k] - z
+
+        ref_shifted = self.nt_multishift(ref[:, :], shifts)
+        z = ref_shifted @ r
+        y = x[:z.shape[0], :] - z
         
         y0 = y.copy()
-        y, _ = self.nt_demean(y, wx)  # Multishift(ref) is not necessarily zero mean
-        mn2 = y - y0
+        y_demeaned, _ = self.nt_demean(y, wx)  # Multishift(ref) is not necessarily zero mean
+        mn2 = y_demeaned - y0
         
         # idx for alignment
         idx_output = np.arange(offset1, offset1 + y.shape[0])
@@ -948,9 +1629,9 @@ class PyZaplinePlus:
         w = wref
         
         # Return outputs
-        return y, idx_output, w    
+        return y_demeaned, idx_output, w
 
-    def nt_mmat(self,x, m):
+    def nt_mmat(self, x, m):
         """
         Matrix multiplication (with convolution).
 
@@ -981,28 +1662,19 @@ class PyZaplinePlus:
             y = y.reshape(y_shape)
             return y
 
-        # If m is 2D, perform simple matrix multiplication
+        # If m is 2D, perform simple matrix multiplication using    
         if m.ndim == 2:
-            # Unfold x to 2D
-            if x.ndim == 3:
-                time_dim, chan_dim, trial_dim = x.shape
-                x_unfolded = x.reshape(time_dim * trial_dim, chan_dim)
-            elif x.ndim == 2:
-                x_unfolded = x
-                time_dim, chan_dim = x.shape
-                trial_dim = 1
+            y = self.nt_mmat0(x, m)
+
+            # Ensure y has the correct shape by removing any singleton dimensions
+            if y.ndim == 3 and y.shape[2] == 1:
+                y = y.squeeze(-1)
+            elif y.ndim == 2:
+                pass  # Already correct
             else:
-                raise ValueError('x must be 2D or 3D array.')
-
-            # Perform matrix multiplication
-            x_multiplied = x_unfolded @ m
-
-            # Fold back to original dimensions
-            if trial_dim > 1:
-                y = x_multiplied.reshape(time_dim, trial_dim, -1).transpose(0, 2, 1)
-            else:
-                y = x_multiplied
-
+                # Handle unexpected dimensions
+                y = np.squeeze(y)
+            
             return y
 
         else:
@@ -1045,6 +1717,65 @@ class PyZaplinePlus:
 
             return y
 
+    def nt_mmat0(self,x, m):
+        """
+        Performs matrix multiplication after unfolding x, then folds the result back.
+
+        Parameters:
+            x (np.ndarray): Input data. Can be 2D or 3D.
+            m (np.ndarray): Matrix to multiply with. Should be 2D.
+
+        Returns:
+            y (np.ndarray): Result after multiplication and folding.
+        """
+        unfolded_x = self.nt_unfold(x)
+        multiplied = unfolded_x @ m
+        epochsize = x.shape[0]   # Assuming epochsize is the first dimension
+        folded_y = self.nt_fold(multiplied, epochsize)
+        return folded_y
+
+    def nt_unfold(self,x):
+        """
+        Converts a 3D matrix (time x channel x trial) into a 2D matrix (time*trial x channel).
+
+        Parameters:
+            x (np.ndarray): Input data. Can be 2D or 3D.
+
+        Returns:
+            y (np.ndarray): Unfolded data.
+        """
+        if x.size == 0:
+            return np.array([])
+        else:
+            if x.ndim == 3:
+                m, n, p = x.shape
+                if p > 1:
+                    y = np.reshape(np.transpose(x, (0, 2, 1)), (m * p, n))
+                else:
+                    y = x
+            else:
+                y = x
+        return y
+    def nt_fold(self,x, epochsize):
+        """
+        Converts a 2D matrix (time*trial x channel) back into a 3D matrix (time x channel x trial).
+
+        Parameters:
+            x (np.ndarray): Input data. Should be 2D.
+            epochsize (int): Number of samples per trial.
+
+        Returns:
+            y (np.ndarray): Folded data.
+        """
+        if x.size == 0:
+            return np.array([])
+        else:
+            if x.shape[0] / epochsize > 1:
+                trials = int(x.shape[0] / epochsize)
+                y = np.transpose(np.reshape(x, (epochsize, trials, x.shape[1])), (0, 2, 1))
+            else:
+                y = x
+        return y
 
     def nt_demean(self, x, w=None):
         """
@@ -1058,6 +1789,10 @@ class PyZaplinePlus:
             x_demeaned (np.ndarray): Demeaned data array.
             mn (np.ndarray): Mean values that were removed.
         """
+        if x.ndim == 2:
+            n_dim=2
+            x=x[:,:,np.newaxis]
+            w=w[:,:,np.newaxis]
         if w is not None and w.size < x.shape[0]:
             # Interpret w as array of indices to set to 1
             w_indices = w.flatten()
@@ -1091,7 +1826,9 @@ class PyZaplinePlus:
 
         x_demeaned = x_demeaned.reshape(m, n, o)
         mn = mn.reshape(1, n, o)
-
+        if n_dim == 2:
+            x_demeaned = x_demeaned.squeeze(-1)  # Remove the last dimension if singleton
+            mn = mn.squeeze(-1)
         return x_demeaned, mn
     def nt_normcol(self, x, w=None):
         """
@@ -1132,11 +1869,10 @@ class PyZaplinePlus:
                     raise ValueError('Weight matrix should have same number of time samples as data')
                 if w.ndim == 2 and w.shape[1] == 1:
                     w = np.tile(w, (1, n, o))
-                if w.shape != x.shape:
-                    raise ValueError('Weight should have same shape as data')
                 w_unfolded = w.reshape(m * o, n)
                 y_unfolded, N = self.nt_normcol(x_unfolded, w_unfolded)
             y = y_unfolded.reshape(m, n, o)
+            
             norms = np.sqrt(N)
             return y, norms
 
@@ -1177,34 +1913,77 @@ class PyZaplinePlus:
             r (np.ndarray): Regression matrix to apply to regressor to best model data.
         """
         # PCA of regressor covariance matrix
-        eigenvalues, topcs = np.linalg.eigh(cyy)
-        # Sort eigenvalues and eigenvectors in descending order
-        idx = eigenvalues.argsort()[::-1]
-        eigenvalues = eigenvalues[idx]
-        topcs = topcs[:, idx]
+        topcs,eigenvalues = self.nt_pcarot(cyy)
+
 
         # Discard negligible regressor PCs
         if keep is not None:
-            keep = min(keep, topcs.shape[1])
+            keep = max(keep, topcs.shape[1])
             topcs = topcs[:, :keep]
             eigenvalues = eigenvalues[:keep]
 
-        if threshold is not None and threshold > 0:
-            idx_thresh = eigenvalues / np.max(eigenvalues) > threshold
-            topcs = topcs[:, idx_thresh]
-            eigenvalues = eigenvalues[idx_thresh]
+        # if threshold is not None and threshold > 0:
+        #     idx_thresh = np.where(eigenvalues / np.max(eigenvalues) > threshold)[0]
+        #     topcs = topcs[idx_thresh]
+        #     eigenvalues = eigenvalues[idx_thresh]
+        topcs, eigenvalues= self.normalize_topcs(eigenvalues, topcs, threshold)
 
         # Cross-covariance between data and regressor PCs
         cxy = cxy.T  # Transpose cxy to match dimensions
         r = topcs.T @ cxy
 
         # Projection matrix from regressor PCs
-        r = r / eigenvalues[:, np.newaxis]
+        r = self.nt_vecmult(r,1 / eigenvalues)
 
         # Projection matrix from regressors
         r = topcs @ r
 
         return r
+    def normalize_topcs(self, eigenvalues, topcs, threshold=None):
+        """
+        Normalize and select top principal components based on a threshold.
+
+        Parameters:
+            eigenvalues (np.ndarray): 1D array of eigenvalues.
+            topcs (np.ndarray): 2D array of top principal components (channels x PCs).
+            threshold (float, optional): Threshold value for selecting eigenvalues.
+
+        Returns:
+            topcs_normalized (np.ndarray): Normalized top principal components.
+            eigenvalues_selected (np.ndarray): Selected eigenvalues after thresholding.
+        """
+        if threshold is not None and threshold > 0:
+            # Ensure eigenvalues is 1D
+            if eigenvalues.ndim > 1:
+                eigenvalues = np.diag(eigenvalues)
+            
+            # Compute the ratio and create a boolean mask
+            ratio = eigenvalues / np.max(eigenvalues)
+            mask = ratio > threshold  # Boolean array
+            
+            # Debug statements (optional)
+            # print(f"Eigenvalues: {eigenvalues}")
+            # print(f"Max Eigenvalue: {np.max(eigenvalues)}")
+            # print(f"Threshold: {threshold}")
+            # print(f"Ratio: {ratio}")
+            # print(f"Mask: {mask}")
+            
+            # Select indices where the condition is True
+            idx_thresh = np.where(mask)[0]
+            
+            # Debug statement (optional)
+            # print(f"Selected indices: {idx_thresh}")
+            
+            # Select columns in topcs based on idx_thresh
+            topcs_selected = topcs[:,idx_thresh]
+            
+            # Select corresponding eigenvalues
+            eigenvalues_selected = eigenvalues[idx_thresh]
+            
+            return topcs_selected, eigenvalues_selected
+        else:
+            # If no threshold is provided, return the original arrays
+            return topcs, eigenvalues
     def nt_spect_plot(self, data, nfft, fs, return_data=False):
         """
         Compute and optionally plot the power spectrum of the data.
@@ -1238,63 +2017,313 @@ class PyZaplinePlus:
             threshold = np.mean(data_vector) + sd_level * np.std(data_vector)
 
         return n_remove, threshold  
-    def add_back_flat_channels(self, clean_data):
+    def generate_output_figures(self, data, clean_data, noise_freq, zapline_config, pxx_raw_log, pxx_clean_log, pxx_removed_log, f, analytics, NremoveFinal):
         """
-        Add back flat channels to the cleaned data.
+        Generate figures to visualize the results, replicating the MATLAB figures with the same colors.
         """
-        if not self.flat_channels.size:
-            return clean_data
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
+        import matplotlib.gridspec as gridspec
+        import os
 
-        full_clean_data = np.zeros((clean_data.shape[0], clean_data.shape[1] + len(self.flat_channels)))
+        # Colors
+        red = np.array([230, 100, 50]) / 256
+        green = np.array([0, 97, 100]) / 256
+        grey = np.array([0.2, 0.2, 0.2])
 
-        # Insert back flat channels into their original positions
-        for i, flat_chan in enumerate(self.flat_channels):
-            full_clean_data[:, flat_chan] = 0  # Flat channel values are zero
-        full_clean_data[:, [i for i in range(full_clean_data.shape[1]) if i not in self.flat_channels]] = clean_data
+        # Prepare chunk indices for plotting
+        chunk_indices = zapline_config.get('chunkIndices', None)
+        if chunk_indices is None:
+            print("Error: 'chunkIndices' not provided in 'zapline_config'.")
+            return
+        chunk_indices = np.array(chunk_indices)
+        chunk_indices_plot = chunk_indices / self.sampling_rate / 60  # Convert to minutes
 
-        return full_clean_data    
-    def generate_output_figures(self, data, clean_data, noise_freq, zapline_config):
-        """
-        Generate figures to visualize the results.
-        """
-        f, pxx_raw = signal.welch(data, fs=self.sampling_rate, nperseg=int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate), axis=0)
-        f, pxx_clean = signal.welch(clean_data, fs=self.sampling_rate, nperseg=int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate), axis=0)
-        pxx_raw_log = 10 * np.log10(pxx_raw)
-        pxx_clean_log = 10 * np.log10(pxx_clean)
+        # Compute chunk_indices_plot_individual
+        chunk_indices_plot_individual = np.array([
+            np.mean([chunk_indices_plot[i], chunk_indices_plot[i+1]]) for i in range(len(chunk_indices_plot)-1)
+        ])
 
-        fig, axes = plt.subplots(3, 1, figsize=(20, 15))
-
-        # Plot original power around noise frequency
+        # Frequency index for plotting around the noise frequency
         this_freq_idx_plot = (f >= noise_freq - 1.1) & (f <= noise_freq + 1.1)
-        axes[0].plot(f[this_freq_idx_plot], np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1), color='gray', label='Original Power')
-        axes[0].set_title(f"Original Power Spectrum around {noise_freq} Hz")
-        axes[0].set_xlabel("Frequency (Hz)")
-        axes[0].set_ylabel("Power (10*log10 μV^2/Hz)")
-        axes[0].legend()
-        axes[0].grid(True)
 
-        # Plot number of components removed
-        axes[1].bar(range(len(zapline_config['nkeep'])), zapline_config['nkeep'], color='grey', alpha=0.5)
-        axes[1].set_title(f"Number of Removed Components at {noise_freq} Hz")
-        axes[1].set_xlabel("Chunk Index")
-        axes[1].set_ylabel("Number of Components Removed")
-        axes[1].grid(True)
+        # Create figure and GridSpec
+        fig = plt.figure(figsize=(20, 15))
+        gs = gridspec.GridSpec(nrows=5, ncols=4, figure=fig, height_ratios=[1, 1, 1, 1, 1])
 
-        # Plot cleaned power around noise frequency
-        axes[2].plot(f[this_freq_idx_plot], np.mean(pxx_clean_log[this_freq_idx_plot, :], axis=1), color='green', label='Cleaned Power')
-        axes[2].set_title(f"Cleaned Power Spectrum around {noise_freq} Hz")
-        axes[2].set_xlabel("Frequency (Hz)")
-        axes[2].set_ylabel("Power (10*log10 μV^2/Hz)")
-        axes[2].legend()
-        axes[2].grid(True)
+        # First row: ax1, ax4, ax5
+        ax1 = fig.add_subplot(gs[0, 0])
+        ax4 = fig.add_subplot(gs[0, 1])
+        ax5 = fig.add_subplot(gs[0, 2:4])
+
+        # Second row: ax2 (span all columns)
+        ax2 = fig.add_subplot(gs[1, :])
+
+        # Third row: ax3 (span all columns)
+        ax3 = fig.add_subplot(gs[2, :])
+
+        # Fourth row: ax6 and ax7
+        ax6 = fig.add_subplot(gs[3, 0:2])
+        ax7 = fig.add_subplot(gs[3, 2:4])
+
+        # Fifth row: ax8 (span all columns)
+        ax8 = fig.add_subplot(gs[4, :])
+
+        # Plot original power on ax1
+        ax1.plot(f[this_freq_idx_plot], np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1), color=grey)
+        ax1.set_xlim([f[this_freq_idx_plot][0] - 0.01, f[this_freq_idx_plot][-1]])
+
+        # Y-axis limits
+        remaining_noise_thresh_lower = zapline_config.get('remaining_noise_thresh_lower', None)
+        remaining_noise_thresh_upper = zapline_config.get('remaining_noise_thresh_upper', None)
+        coarse_freq_detect_power_diff = zapline_config.get('coarseFreqDetectPowerDiff', None)
+        if remaining_noise_thresh_lower is not None and remaining_noise_thresh_upper is not None and coarse_freq_detect_power_diff is not None:
+            ylim_lower = remaining_noise_thresh_lower - 0.25 * (remaining_noise_thresh_upper - remaining_noise_thresh_lower)
+            ylim_upper = np.min(np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1)) + coarse_freq_detect_power_diff * 2
+            ax1.set_ylim([ylim_lower, ylim_upper])
+        else:
+            y_min = np.min(np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1))
+            y_max = np.max(np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1))
+            ax1.set_ylim([y_min - 0.25 * (y_max - y_min), y_max + 0.25 * (y_max - y_min)])
+
+        ax1.spines['top'].set_visible(False)
+        ax1.spines['right'].set_visible(False)
+        ax1.tick_params(labelsize=12)
+        ax1.set_xlabel('Frequency (Hz)')
+        ax1.set_ylabel('Power [10*log10 μV^2/Hz]')
+
+        # Automatic frequency detection
+        automatic_freq_detection = zapline_config.get('automaticFreqDetection', False)
+        thresh = zapline_config.get('thresh', None)
+        if automatic_freq_detection:
+            if thresh is not None:
+                ax1.plot(ax1.get_xlim(), [thresh[0], thresh[0]], color=red)
+            ax1.set_title(f'Detected frequency: {noise_freq} Hz')
+        else:
+            ax1.set_title(f'Predefined frequency: {noise_freq} Hz')
+
+        # Plot number of removed components on ax2
+        ax2.cla()
+
+        if NremoveFinal is None:
+            print("Error: 'NremoveFinal' not provided.")
+            return
+
+        search_individual_noise = zapline_config.get('searchIndividualNoise', False)
+        found_noise = zapline_config.get('foundNoise', [True]*len(NremoveFinal))
+        nonoisehandle = None
+
+        for i_chunk in range(len(chunk_indices_plot)-1):
+            if (not search_individual_noise) or found_noise[i_chunk]:
+                # Plot grey fill
+                ax2.fill_between(
+                    [chunk_indices_plot[i_chunk], chunk_indices_plot[i_chunk+1]],
+                    0, NremoveFinal[i_chunk],
+                    color=grey,
+                    alpha=0.5
+                )
+            else:
+                # Plot green fill
+                nonoisehandle = ax2.fill_between(
+                    [chunk_indices_plot[i_chunk], chunk_indices_plot[i_chunk+1]],
+                    0, NremoveFinal[i_chunk],
+                    color=green,
+                    alpha=0.5
+                )
+
+        ax2.set_xlim([chunk_indices_plot[0], chunk_indices_plot[-1]])
+        ax2.set_ylim([0, max(NremoveFinal) + 1])
+        n_chunks = len(NremoveFinal)
+        ax2.set_title(f'# removed comps in {n_chunks} chunks, μ = {round(np.mean(NremoveFinal), 2)}')
+        ax2.tick_params(labelsize=12)
+        ax2.spines['top'].set_visible(False)
+        ax2.spines['right'].set_visible(False)
+        ax2.set_xlabel('Time [minutes]')
+        ax2.set_ylabel('Number of Components Removed')
+
+        # Plot noise peaks on ax3
+        noise_peaks = zapline_config.get('noisePeaks', None)
+        if noise_peaks is None:
+            print("Error: 'noisePeaks' not provided in 'zapline_config'.")
+            return
+
+        for i_chunk in range(len(chunk_indices_plot)-2):
+            ax3.plot(
+                [chunk_indices_plot[i_chunk+1], chunk_indices_plot[i_chunk+1]],
+                [0, 1000],
+                color=grey * 3
+            )
+
+        ax3.plot(chunk_indices_plot_individual, noise_peaks, color=grey)
+        ax3.set_xlim([chunk_indices_plot[0], chunk_indices_plot[-1]])
+        max_diff = max([(max(noise_peaks)) - noise_freq, noise_freq - (min(noise_peaks))])
+        if max_diff == 0:
+            max_diff = 0.01
+        ax3.set_ylim([noise_freq - max_diff * 1.5, noise_freq + max_diff * 1.5])
+        ax3.set_xlabel('Time [minutes]')
+        ax3.set_title('Individual noise frequencies [Hz]')
+        ax3.tick_params(labelsize=12)
+        ax3.spines['top'].set_visible(False)
+        ax3.spines['right'].set_visible(False)
+
+        if search_individual_noise:
+            found_noise_plot = np.array(found_noise, dtype=float)
+            found_noise_plot[found_noise_plot == 1] = np.nan
+            found_noise_plot[~np.isnan(found_noise_plot)] = noise_peaks[~np.isnan(found_noise_plot)]
+            ax3.plot(chunk_indices_plot_individual, found_noise_plot, 'o', color=green)
+
+            if nonoisehandle is not None:
+                ax3.legend([nonoisehandle], ['No clear noise peak found'], edgecolor=[0.8, 0.8, 0.8])
+
+        # Plot scores on ax4
+        scores = zapline_config.get('scores', None)
+        if scores is None:
+            print("Error: 'scores' not provided in 'zapline_config'.")
+            return
+
+        ax4.plot(np.nanmean(scores, axis=0), color=grey)
+
+        mean_Nremove = np.mean(NremoveFinal) + 1
+        ax4.plot([mean_Nremove, mean_Nremove], ax4.get_ylim(), color=red)
+        ax4.set_xlim([0.7, round(scores.shape[1] / 3)])
+        adaptive_nremove = zapline_config.get('adaptiveNremove', False)
+        noise_comp_detect_sigma = zapline_config.get('noiseCompDetectSigma', None)
+        if adaptive_nremove and noise_comp_detect_sigma is not None:
+            ax4.set_title(f'Mean artifact scores [a.u.], σ for detection = {noise_comp_detect_sigma}')
+        else:
+            ax4.set_title('Mean artifact scores [a.u.]')
+        ax4.set_xlabel('Component')
+        ax4.tick_params(labelsize=12)
+        ax4.spines['top'].set_visible(False)
+        ax4.spines['right'].set_visible(False)
+        ax4.legend(['Mean removed'], edgecolor=[0.8, 0.8, 0.8])
+
+        # Plot new power on ax5
+        ax5.plot(f[this_freq_idx_plot], np.mean(pxx_clean_log[this_freq_idx_plot, :], axis=1), color=green)
+        ax5.set_xlim([f[this_freq_idx_plot][0] - 0.01, f[this_freq_idx_plot][-1]])
+
+        # Plot thresholds
+        this_freq_idx_upper_check = zapline_config.get('thisFreqidxUppercheck', None)
+        this_freq_idx_lower_check = zapline_config.get('thisFreqidxLowercheck', None)
+        remaining_noise_thresh_upper = zapline_config.get('remaining_noise_thresh_upper', None)
+        remaining_noise_thresh_lower = zapline_config.get('remaining_noise_thresh_lower', None)
+        proportion_above_upper = zapline_config.get('proportion_above_upper', None)
+        proportion_below_lower = zapline_config.get('proportion_below_lower', None)
+
+        try:
+            if this_freq_idx_upper_check is not None and this_freq_idx_lower_check is not None:
+                upper_freqs = f[this_freq_idx_upper_check]
+                lower_freqs = f[this_freq_idx_lower_check]
+                l1, = ax5.plot(
+                    [upper_freqs[0], upper_freqs[-1]],
+                    [remaining_noise_thresh_upper, remaining_noise_thresh_upper],
+                    color=grey
+                )
+                l2, = ax5.plot(
+                    [lower_freqs[0], lower_freqs[-1]],
+                    [remaining_noise_thresh_lower, remaining_noise_thresh_lower],
+                    color=red
+                )
+                legend_labels = [
+                    f"{round(proportion_above_upper * 100, 2)}% above",
+                    f"{round(proportion_below_lower * 100, 2)}% below"
+                ]
+                ax5.legend([l1, l2], legend_labels, loc='upper center', edgecolor=[0.8, 0.8, 0.8])
+        except Exception as e:
+            print("Could not plot thresholds:", e)
+
+        # Y-axis limits for ax5
+        if remaining_noise_thresh_lower is not None and remaining_noise_thresh_upper is not None and coarse_freq_detect_power_diff is not None:
+            ylim_lower = remaining_noise_thresh_lower - 0.25 * (remaining_noise_thresh_upper - remaining_noise_thresh_lower)
+            ylim_upper = np.min(np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1)) + coarse_freq_detect_power_diff * 2
+            ax5.set_ylim([ylim_lower, ylim_upper])
+        else:
+            y_min = np.min(np.mean(pxx_clean_log[this_freq_idx_plot, :], axis=1))
+            y_max = np.max(np.mean(pxx_clean_log[this_freq_idx_plot, :], axis=1))
+            ax5.set_ylim([y_min - 0.25 * (y_max - y_min), y_max + 0.25 * (y_max - y_min)])
+
+        ax5.set_xlabel('Frequency (Hz)')
+        ax5.set_ylabel('Power [10*log10 μV^2/Hz]')
+        ax5.set_title('Cleaned spectrum')
+        ax5.tick_params(labelsize=12)
+        ax5.spines['top'].set_visible(False)
+        ax5.spines['right'].set_visible(False)
+
+        # Plot starting spectrum on ax6
+        ax6.cla()
+        meanhandles, = ax6.plot(f, np.mean(pxx_raw_log, axis=1), color=grey, linewidth=1.5)
+        ax6.grid(True, which='both', linestyle='--', linewidth=0.5)
+        ax6.tick_params(labelsize=12)
+        ax6.set_xlabel('Frequency')
+        ax6.set_ylabel('Power [10*log10 μV^2/Hz]')
+        ylimits1 = ax6.get_ylim()
+        ratio_noise_raw = analytics.get('ratio_noise_raw', None)
+        ax6.set_title(f'Noise frequency: {noise_freq} Hz\nRatio of noise to surroundings: {ratio_noise_raw:.2f}')
+        ax6.spines['top'].set_visible(False)
+        ax6.spines['right'].set_visible(False)
+
+        # Plot removed and clean spectrum on ax7
+        removedhandle, = ax7.plot(f / noise_freq, np.mean(pxx_removed_log, axis=1), color=red, linewidth=1.5)
+        cleanhandle, = ax7.plot(f / noise_freq, np.mean(pxx_clean_log, axis=1), color=green, linewidth=1.5)
+        ax7.grid(True, which='both', linestyle='--', linewidth=0.5)
+        ax7.tick_params(labelsize=12)
+        ax7.set_xlabel('Frequency (relative to noise)')
+        ax7.set_ylabel('')
+        ylimits2 = ax7.get_ylim()
+        ylimits = [min(ylimits1[0], ylimits2[0]), max(ylimits1[1], ylimits2[1])]
+        ax6.set_ylim(ylimits)
+        ax7.set_ylim(ylimits)
+        ax6.set_xlim([np.min(f) - np.max(f) * 0.0032, np.max(f)])
+        ax7.set_xlim([np.min(f / noise_freq) - np.max(f / noise_freq) * 0.003, np.max(f / noise_freq)])
+        proportion_removed_noise = analytics.get('proportion_removed_noise', None)
+        ratio_noise_clean = analytics.get('ratio_noise_clean', None)
+        ax7.set_title(f'Removed power at noise frequency: {proportion_removed_noise * 100:.2f}%\nRatio of noise to surroundings: {ratio_noise_clean:.2f}')
+        ax7.spines['top'].set_visible(False)
+        ax7.spines['right'].set_visible(False)
+
+        # Plot shaded min/max frequency areas
+        minfreq = self.config.get('minfreq', None)
+        maxfreq = self.config.get('maxfreq', None)
+        if minfreq is not None and maxfreq is not None:
+            # Shade areas in ax6
+            ax6.add_patch(Rectangle((0, ylimits[0]), minfreq, ylimits[1] - ylimits[0], color='black', alpha=0.1))
+            ax6.add_patch(Rectangle((maxfreq, ylimits[0]), f[-1] - maxfreq, ylimits[1] - ylimits[0], color='black', alpha=0.1))
+            # Shade areas in ax7
+            ax7.add_patch(Rectangle((0, ylimits[0]), minfreq / noise_freq, ylimits[1] - ylimits[0], color='black', alpha=0.1))
+            ax7.add_patch(Rectangle((maxfreq / noise_freq, ylimits[0]), (f[-1] / noise_freq) - (maxfreq / noise_freq),
+                                    ylimits[1] - ylimits[0], color='black', alpha=0.1))
+        ax6.legend([meanhandles], ['Raw data'], edgecolor=[0.8, 0.8, 0.8])
+        ax7.legend([cleanhandle, removedhandle], ['Clean data', 'Removed data'], edgecolor=[0.8, 0.8, 0.8])
+
+        # Plot below noise on ax8
+        this_freq_idx_belownoise = (f >= max(noise_freq - 11, 0)) & (f <= noise_freq - 1)
+        ax8.plot(f[this_freq_idx_belownoise], np.mean(pxx_raw_log[this_freq_idx_belownoise, :], axis=1),
+                color=grey, linewidth=1.5)
+        ax8.plot(f[this_freq_idx_belownoise], np.mean(pxx_clean_log[this_freq_idx_belownoise, :], axis=1),
+                color=green, linewidth=1.5)
+        ax8.legend(['Raw data', 'Clean data'], edgecolor=[0.8, 0.8, 0.8])
+        ax8.grid(True, which='both', linestyle='--', linewidth=0.5)
+        ax8.tick_params(labelsize=12)
+        ax8.set_xlabel('Frequency')
+        ax8.spines['top'].set_visible(False)
+        ax8.spines['right'].set_visible(False)
+        ax8.set_xlim([np.min(f[this_freq_idx_belownoise]), np.max(f[this_freq_idx_belownoise])])
+        proportion_removed = analytics.get('proportion_removed', None)
+        proportion_removed_below_noise = analytics.get('proportion_removed_below_noise', None)
+        ax8.set_title(f'Removed of full spectrum: {proportion_removed * 100:.2f}%\nRemoved below noise: {proportion_removed_below_noise * 100:.2f}%')
 
         plt.tight_layout()
+        plt.draw()
+        plt.savefig(os.path.join('pyZapline_plus', 'zapline_results.png'))
         return fig
+
+
+
+
     def run(self):
         
         self.finalize_inputs()
-        
-        clean_data = self.data.copy()
         zapline_config = self.config.copy()
         analytics_results = {}
         plot_handles = []
@@ -1305,20 +2334,23 @@ class PyZaplinePlus:
             if self.config['chunkLength'] != 0:
                 chunk_indices = self.fixed_chunk_detection()
             else:
-                chunk_indices = self.adaptive_chunk_detection()
+                chunk_indices = self.adaptive_chunk_detection(noise_freq)
             
+            zapline_config['chunkIndices'] = chunk_indices
             n_chunks = len(chunk_indices) - 1
             print(f"{n_chunks} chunks will be created.")
-
+            
             cleaning_done = False
+            cleaning_too_strong_once=False
             while not cleaning_done:
+                clean_data = np.zeros_like(self.data)
                 scores = np.zeros((n_chunks, self.config['nkeep']))
                 n_remove_final = np.zeros(n_chunks)
                 noise_peaks = np.zeros(n_chunks)
                 found_noise = np.zeros(n_chunks)
 
                 for i_chunk in range(n_chunks):
-                    chunk = clean_data[chunk_indices[i_chunk]:chunk_indices[i_chunk+1], :]
+                    chunk = self.data[chunk_indices[i_chunk]:chunk_indices[i_chunk+1], :]
                     
                     if self.config['searchIndividualNoise']:
                         chunk_noise_freq = self.detect_chunk_noise(chunk, noise_freq)
@@ -1333,13 +2365,29 @@ class PyZaplinePlus:
                     noise_peaks[i_chunk] = chunk_noise_freq
                     found_noise[i_chunk] = 1 if chunk_noise_freq != noise_freq else 0
 
-                pxx_clean, f = self.compute_spectrum(clean_data)
-                analytics = self.compute_analytics(self.pxx_raw_log, pxx_clean, f, noise_freq)
+                pxx_clean_log, f= self.compute_spectrum(clean_data)
+                # pxx_raw_log=   sel.compute_spectrum(self.data)
+                pxx_removed_log=self.compute_spectrum(self.data-clean_data)
                 
-                cleaning_done, zapline_config = self.adaptive_cleaning(clean_data, self.data, noise_freq)
-
+                analytics = self.compute_analytics(self.pxx_raw_log, pxx_clean_log,f , noise_freq)
+                cleaning_done, zapline_config,cleaning_too_strong_once = self.adaptive_cleaning(clean_data, self.data, noise_freq,zapline_config,cleaning_too_strong_once)
+                zapline_config['noisePeaks'] = noise_peaks
+                zapline_config['scores'] = scores
             if self.config['plotResults']:
-                plot_handle = self.generate_output_figures(self.data, clean_data, noise_freq, zapline_config)
+                pxx_removed_log, _ = self.compute_spectrum(self.data - clean_data)
+
+                plot_handle = self.generate_output_figures(
+                                                        data=self.data,
+                                                        clean_data=clean_data,
+                                                        noise_freq=noise_freq,
+                                                        zapline_config=zapline_config,
+                                                        pxx_raw_log=self.pxx_raw_log,
+                                                        pxx_clean_log=pxx_clean_log,
+                                                        pxx_removed_log=pxx_removed_log,
+                                                        f=f,
+                                                        analytics=analytics,
+                                                        NremoveFinal=n_remove_final,
+                                                        )                                           
                 if plot_handle:
                     plot_handles.append(plot_handle)
 
