@@ -1,6 +1,15 @@
 # PyZaplinePlus
 
-PyZaplinePlus is a Python adaptation of the Zapline-plus library, designed to automatically remove spectral peaks like line noise from EEG data while preserving the integrity of the non-noise spectrum and maintaining the data rank. Similar to its MATLAB counterpart, PyZaplinePlus searches for noise frequencies, divides the data into spatially stable chunks, and adjusts the cleaning strength dynamically to minimize negative impacts. The package also offers detailed visualizations of the cleaning process.
+**🧠 Advanced Python library for automatic and adaptive removal of line noise from EEG data**
+
+[![PyPI version](https://badge.fury.io/py/pyzaplineplus.svg)](https://badge.fury.io/py/pyzaplineplus)
+[![Python Support](https://img.shields.io/pypi/pyversions/pyzaplineplus.svg)](https://pypi.org/project/pyzaplineplus/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Documentation](https://img.shields.io/badge/docs-latest-blue.svg)](https://sinaesmaeili.github.io/PyZaplinePlus/)
+[![Test Status](https://github.com/SinaEsmaeili/PyZaplinePlus/workflows/Test/badge.svg)](https://github.com/SinaEsmaeili/PyZaplinePlus/actions)
+[![Coverage](https://codecov.io/gh/SinaEsmaeili/PyZaplinePlus/branch/main/graph/badge.svg)](https://codecov.io/gh/SinaEsmaeili/PyZaplinePlus)
+
+PyZaplinePlus is a professional Python adaptation of the **Zapline-plus** library, designed to automatically remove spectral peaks like line noise from EEG data while preserving the integrity of the non-noise spectrum and maintaining the data rank. Unlike traditional notch filters, PyZaplinePlus uses sophisticated spectral detection and **Denoising Source Separation (DSS)** to identify and remove line noise components adaptively.
 
 ## Overview
 
@@ -19,56 +28,124 @@ The main objectives of PyZaplinePlus include:
 - **Advanced Spectrum Analysis:** Refined detection mechanisms for identifying noisy components in both the coarse and fine frequency domains.
 - **Visualization Support:** Built-in functionality for plotting power spectra before and after denoising to allow easy evaluation of noise removal results.
 
-## Installation
+## 🚀 Installation
 
-To install PyZaplinePlus, you can use the following command:
+### From PyPI (Recommended)
 
-```sh
+```bash
 pip install pyzaplineplus
 ```
 
-### Dependencies
-PyZaplinePlus requires the following Python packages:
-- `numpy`
-- `scipy`
-- `sklearn`
-- `matplotlib`
-- `mne` (optional for EEG integration)
+### From Source
 
-Make sure all dependencies are installed before running the code.
+```bash
+git clone https://github.com/SinaEsmaeili/PyZaplinePlus.git
+cd PyZaplinePlus
+pip install -e .
+```
 
-## Usage
+### With Optional Dependencies
+
+```bash
+# For MNE-Python integration
+pip install pyzaplineplus[mne]
+
+# For development
+pip install pyzaplineplus[dev]
+```
+
+### Requirements
+
+- **Python**: 3.8 or higher
+- **Core dependencies**:
+  - `numpy >= 1.20.0`
+  - `scipy >= 1.7.0` 
+  - `scikit-learn >= 1.0.0`
+  - `matplotlib >= 3.3.0`
+- **Optional**:
+  - `mne >= 1.0.0` (for EEG integration)
+
+## 💡 Usage
 
 ### Quick Start
-If you wish to get started right away, you can use PyZaplinePlus with any EEG data matrix and sampling rate like this:
 
 ```python
 import numpy as np
 from pyzaplineplus import zapline_plus
 
-# Load your data (example)
-data = np.load('synthetic_eeg_data.npy')
+# Your EEG data (time × channels)
+data = np.random.randn(10000, 64)  # 10s of 64-channel data at 1000 Hz
 sampling_rate = 1000
 
-# Clean the data
-cleaned_data = zapline_plus(data, sampling_rate)
+# Clean the data - it's that simple!
+cleaned_data, config, analytics, plots = zapline_plus(data, sampling_rate)
 ```
 
-### Integration with MNE
-If you are using the MNE-Python library, PyZaplinePlus can be easily integrated into your MNE workflow for EEG preprocessing.
+### Advanced Usage
 
 ```python
-from mne import io
+from pyzaplineplus import PyZaplinePlus
+
+# Initialize with custom parameters
+zp = PyZaplinePlus(
+    data, sampling_rate,
+    noisefreqs=[50, 60],      # Target 50 and 60 Hz
+    minfreq=45,               # Search range: 45-65 Hz
+    maxfreq=65,
+    chunkLength=10,           # 10-second chunks
+    adaptiveNremove=True,     # Adaptive component removal
+    plotResults=True          # Generate diagnostic plots
+)
+
+# Run the cleaning process
+clean_data, config, analytics, plots = zp.run()
+```
+
+### Integration with MNE-Python
+
+```python
+import mne
 from pyzaplineplus import zapline_plus
 
-# Load your MNE data object
-raw = io.read_raw_fif('sample_raw.fif', preload=True)
-data = raw.get_data()
+# Load your MNE data
+raw = mne.io.read_raw_fif('sample_raw.fif', preload=True)
+data = raw.get_data().T  # Transpose to time × channels
 sampling_rate = raw.info['sfreq']
 
 # Clean the data
-cleaned_data = zapline_plus(data, sampling_rate)
-raw._data = cleaned_data  # Update the raw object
+cleaned_data, _, _, _ = zapline_plus(data, sampling_rate)
+
+# Update your MNE object
+raw._data = cleaned_data.T
+```
+
+### Real-World Example
+
+```python
+import numpy as np
+from pyzaplineplus import zapline_plus
+
+# Simulate realistic EEG data with line noise
+fs = 500  # Sampling rate
+duration = 30  # seconds
+n_channels = 64
+
+# Create base EEG signal
+t = np.arange(0, duration, 1/fs)
+eeg = np.random.randn(len(t), n_channels) * 10  # μV
+
+# Add 50 Hz line noise
+line_noise = 5 * np.sin(2 * np.pi * 50 * t)
+noisy_eeg = eeg + line_noise[:, np.newaxis]
+
+# Remove line noise
+clean_eeg, config, analytics, plots = zapline_plus(
+    noisy_eeg, fs,
+    noisefreqs='line',  # Automatic detection
+    plotResults=True
+)
+
+print(f"Noise reduction: {analytics['noise_freq_50']['proportion_removed_noise']*100:.1f}%")
 ```
 
 ### Parameters
@@ -108,10 +185,23 @@ PyZaplinePlus can plot the power spectra of the original and cleaned data, provi
 - **BCI Research:** Brain-computer interface studies that require real-time or offline EEG data analysis can leverage PyZaplinePlus for high-quality signal preprocessing.
 - **General Biomedical Signal Denoising:** PyZaplinePlus can also be applied to other physiological signals, such as ECG or EMG, for noise suppression.
 
-## Contributing
-Contributions are welcome! Feel free to open issues for bug reports, feature requests, or general discussions. If you'd like to contribute code, fork the repository and submit a pull request.
+## 🤝 Contributing
 
-Please ensure all contributions maintain the quality and style of the existing codebase, including writing clear commit messages and documenting new features.
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details on:
+
+- Development setup
+- Coding standards
+- Testing requirements
+- Pull request process
+
+**Quick start for contributors:**
+
+```bash
+git clone https://github.com/SinaEsmaeili/PyZaplinePlus.git
+cd PyZaplinePlus
+pip install -e ".[dev]"
+pytest  # Run tests
+```
 
 ## License
 PyZaplinePlus is released under the MIT License. See `LICENSE` for more details.
@@ -128,5 +218,23 @@ If you find PyZaplinePlus useful in your research, please cite the original pape
 - Klug, M., & Kloosterman, N. A. (2022). Zapline-plus: A Zapline extension for automatic and adaptive removal of frequency-specific noise artifacts in M/EEG. Human Brain Mapping, 1–16. https://doi.org/10.1002/hbm.25832
 - de Cheveigne, A. (2020). ZapLine: a simple and effective method to remove power line artifacts. NeuroImage, 1, 1-13. https://doi.org/10.1016/j.neuroimage.2019.116356
 
-## Contact
-For further questions or support, feel free to contact us via GitHub issues or email at `sina.esmaeili@umontreal.ca`.
+## 📚 Documentation
+
+- **[Full Documentation](https://sinaesmaeili.github.io/PyZaplinePlus/)**: Complete guides and API reference
+- **[Installation Guide](https://sinaesmaeili.github.io/PyZaplinePlus/user-guide/installation/)**: Detailed installation instructions
+- **[Examples](https://sinaesmaeili.github.io/PyZaplinePlus/user-guide/examples/)**: Comprehensive usage examples
+- **[API Reference](https://sinaesmaeili.github.io/PyZaplinePlus/api/core/)**: Complete function documentation
+
+## 💬 Support & Community
+
+- **📖 Documentation**: [https://sinaesmaeili.github.io/PyZaplinePlus/](https://sinaesmaeili.github.io/PyZaplinePlus/)
+- **🐛 Bug Reports**: [GitHub Issues](https://github.com/SinaEsmaeili/PyZaplinePlus/issues)
+- **💡 Feature Requests**: [GitHub Discussions](https://github.com/SinaEsmaeili/PyZaplinePlus/discussions)
+- **❓ Questions**: [GitHub Discussions](https://github.com/SinaEsmaeili/PyZaplinePlus/discussions)
+- **📧 Email**: [sina.esmaeili@umontreal.ca](mailto:sina.esmaeili@umontreal.ca)
+
+## 🏆 Related Projects
+
+- **[MNE-Python](https://mne.tools/)**: Comprehensive neurophysiological data analysis
+- **[EEGLAB](https://eeglab.org/)**: MATLAB toolbox for EEG analysis
+- **[FieldTrip](https://www.fieldtriptoolbox.org/)**: Advanced analysis of MEG, EEG, and invasive electrophysiological data
