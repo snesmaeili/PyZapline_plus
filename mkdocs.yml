@@ -1,0 +1,95 @@
+site_name: PyZaplinePlus Documentation
+site_url: https://sinaesmaeili.github.io/PyZaplinePlus/
+site_description: Advanced Python library for automatic and adaptive removal of line noise from EEG data
+site_author: Sina Esmaeili
+
+repo_url: https://github.com/SinaEsmaeili/PyZaplinePlus
+repo_name: SinaEsmaeili/PyZaplinePlus
+
+nav:
+  - Home: index.md
+  - User Guide:
+    - Installation: user-guide/installation.md
+    - Quick Start: user-guide/quickstart.md
+    - Examples: user-guide/examples.md
+    - MNE Integration: user-guide/mne-integration.md
+  - API Reference:
+    - Core Functions: api/core.md
+    - Noise Detection: api/noise-detection.md
+    - Utilities: api/utilities.md
+  - Developer Guide:
+    - Contributing: developer-guide/contributing.md
+    - Development Setup: developer-guide/development.md
+    - Release Process: developer-guide/release.md
+  - About:
+    - Changelog: about/changelog.md
+    - License: about/license.md
+    - Citation: about/citation.md
+
+theme:
+  name: material
+  palette:
+    # Palette toggle for light mode
+    - scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Palette toggle for dark mode
+    - scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: numpy
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            merge_init_into_class: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/SinaEsmaeili/PyZaplinePlus
+    - icon: fontawesome/solid/envelope
+      link: mailto:sina.esmaeili@umontreal.ca
+
+copyright: Copyright &copy; 2024 Sina Esmaeili
