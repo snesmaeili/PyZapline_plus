@@ -10,6 +10,24 @@ from sklearn.decomposition import PCA
 from typing import Union, List, Optional, Tuple
 class PyZaplinePlus:
     def __init__(self, data, sampling_rate, **kwargs):
+        # Validate inputs
+        if not isinstance(data, np.ndarray):
+            data = np.array(data)
+            
+        # Check for empty data
+        if data.size == 0:
+            raise ValueError("Data array cannot be empty")
+            
+        # Validate sampling rate
+        if not isinstance(sampling_rate, (int, float)) or sampling_rate <= 0:
+            raise ValueError("Sampling rate must be a positive number")
+            
+        # Ensure data is 2D (samples x channels)
+        if data.ndim == 1:
+            data = data.reshape(-1, 1)  # Convert to column vector
+        elif data.ndim > 2:
+            raise ValueError("Data must be 1D or 2D array")
+            
         self.data = data
         self.sampling_rate = sampling_rate
         self.config = {
@@ -103,6 +121,16 @@ class PyZaplinePlus:
 
         # Set window length and overlap to match MATLAB code
         nperseg = int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate)
+        
+        # Ensure nperseg doesn't exceed data length
+        max_nperseg = data.shape[0]
+        if nperseg > max_nperseg:
+            nperseg = max_nperseg
+            
+        # Ensure minimum nperseg for meaningful spectrum
+        if nperseg < 8:
+            nperseg = min(8, max_nperseg)
+            
         noverlap = int(0.5 * nperseg)  # 50% overlap to match MATLAB's default behavior
 
         f, pxx = signal.welch(data, 
@@ -249,12 +277,12 @@ class PyZaplinePlus:
         # 9. Ensure All Chunks Meet Minimum Length
         min_length_samples = int(self.config['minChunkLength'] * self.sampling_rate)
         
-        # Check the first chunk
-        if chunk_indices[1] - chunk_indices[0] < min_length_samples:
+        # Check the first chunk (only if we have at least 2 chunk boundaries)
+        if len(chunk_indices) > 2 and chunk_indices[1] - chunk_indices[0] < min_length_samples:
             chunk_indices.pop(1)  # Remove the first peak
         
-        # Check the last chunk
-        if chunk_indices[-1] - chunk_indices[-2] < min_length_samples:
+        # Check the last chunk (only if we have at least 2 chunk boundaries)
+        if len(chunk_indices) > 2 and chunk_indices[-1] - chunk_indices[-2] < min_length_samples:
             chunk_indices.pop(-2)  # Remove the last peak
         
         # Sort and remove duplicates if any
@@ -2400,13 +2428,42 @@ class PyZaplinePlus:
                 **analytics
             }
 
-        if self.flat_channels:
+        if self.flat_channels.size > 0:
             clean_data = self.add_back_flat_channels(clean_data)
 
         if self.transpose_data:
             clean_data = clean_data.T
 
         return clean_data, zapline_config, analytics_results, plot_handles  
+
+    def add_back_flat_channels(self, clean_data):
+        """
+        Add back flat channels that were removed during preprocessing.
+        
+        Parameters:
+            clean_data (np.ndarray): Cleaned data with flat channels removed
+            
+        Returns:
+            np.ndarray: Cleaned data with flat channels added back as zeros
+        """
+        if self.flat_channels.size == 0:
+            return clean_data
+            
+        # Create output array with original number of channels
+        original_n_channels = clean_data.shape[1] + len(self.flat_channels)
+        n_samples = clean_data.shape[0]
+        output_data = np.zeros((n_samples, original_n_channels))
+        
+        # Create mask for non-flat channels
+        all_channels = np.arange(original_n_channels)
+        non_flat_channels = np.setdiff1d(all_channels, self.flat_channels)
+        
+        # Insert cleaned data back into non-flat channel positions
+        output_data[:, non_flat_channels] = clean_data
+        # Flat channels remain as zeros
+        
+        return output_data
+
 def zapline_plus(data, sampling_rate, **kwargs):
     zp = PyZaplinePlus(data, sampling_rate, **kwargs)
     return zp.run()
