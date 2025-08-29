@@ -90,6 +90,6 @@ The API remains largely the same, but with improved:
 ## Support
 
 For questions about specific versions or migration help:
-- Open an issue on [GitHub](https://github.com/SinaEsmaeili/PyZaplinePlus/issues)
-- Check the [documentation](https://pyzaplineplus.readthedocs.io/)
+- Open an issue on [GitHub](https://github.com/snesmaeili/PyZapline_plus/issues)
+- Check the [documentation](https://snesmaeili.github.io/PyZapline_plus/)
 - Email: sina.esmaeili@umontreal.ca

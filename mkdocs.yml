@@ -1,10 +1,10 @@
 site_name: PyZaplinePlus Documentation
-site_url: https://sinaesmaeili.github.io/PyZaplinePlus/
+site_url: https://snesmaeili.github.io/PyZapline_plus/
 site_description: Advanced Python library for automatic and adaptive removal of line noise from EEG data
 site_author: Sina Esmaeili
 
-repo_url: https://github.com/SinaEsmaeili/PyZaplinePlus
-repo_name: SinaEsmaeili/PyZaplinePlus
+repo_url: https://github.com/snesmaeili/PyZapline_plus
+repo_name: snesmaeili/PyZapline_plus
 
 nav:
   - Home: index.md
@@ -88,7 +88,7 @@ markdown_extensions:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/SinaEsmaeili/PyZaplinePlus
+      link: https://github.com/snesmaeili/PyZapline_plus
     - icon: fontawesome/solid/envelope
       link: mailto:sina.esmaeili@umontreal.ca
 

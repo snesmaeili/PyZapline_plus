@@ -21,7 +21,14 @@ Example:
     >>> cleaned_data, *_ = zapline_plus(data, sampling_rate)
 """
 
-from ._version import __version__
+try:
+    # Prefer version from package metadata (setuptools-scm)
+    from importlib.metadata import version as _pkg_version  # type: ignore
+
+    __version__ = _pkg_version("pyzaplineplus")
+except Exception:  # pragma: no cover - fallback for editable installs without metadata
+    __version__ = "0.0.0"
+
 from .core import PyZaplinePlus, zapline_plus
 from .noise_detection import find_next_noisefreq
 

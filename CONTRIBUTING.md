@@ -23,8 +23,8 @@ Thank you for your interest in contributing to PyZaplinePlus! This document prov
 
 ```bash
 # Clone your fork
-git clone https://github.com/YOUR-USERNAME/PyZaplinePlus.git
-cd PyZaplinePlus
+git clone https://github.com/YOUR-USERNAME/PyZapline_plus.git
+cd PyZapline_plus
 
 # Create a virtual environment
 python -m venv venv

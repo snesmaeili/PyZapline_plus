@@ -2,11 +2,10 @@
 
 **Advanced Python library for automatic and adaptive removal of line noise from EEG data**
 
-[![PyPI version](https://badge.fury.io/py/pyzaplineplus.svg)](https://badge.fury.io/py/pyzaplineplus)
-[![Python Support](https://img.shields.io/pypi/pyversions/pyzaplineplus.svg)](https://pypi.org/project/pyzaplineplus/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Documentation Status](https://readthedocs.org/projects/pyzaplineplus/badge/?version=latest)](https://pyzaplineplus.readthedocs.io/en/latest/?badge=latest)
-[![Test Status](https://github.com/SinaEsmaeili/PyZaplinePlus/workflows/Test/badge.svg)](https://github.com/SinaEsmaeili/PyZaplinePlus/actions)
+[![PyPI - Version](https://img.shields.io/pypi/v/pyzaplineplus.svg)](https://pypi.org/project/pyzaplineplus/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/pyzaplineplus.svg)](https://pypi.org/project/pyzaplineplus/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](../about/license.md)
+[![CI](https://github.com/snesmaeili/PyZapline_plus/actions/workflows/ci.yml/badge.svg)](https://github.com/snesmaeili/PyZapline_plus/actions)
 
 ---
 
@@ -118,7 +117,7 @@ If you use PyZaplinePlus in your research, please cite:
   title = {PyZaplinePlus: Advanced Python library for automatic and adaptive removal of line noise from EEG data},
   author = {Esmaeili, Sina},
   year = {2024},
-  url = {https://github.com/SinaEsmaeili/PyZaplinePlus}
+  url = {https://github.com/snesmaeili/PyZapline_plus}
 }
 ```
 
@@ -136,7 +135,7 @@ And the original Zapline-plus paper:
 
 ## 💬 Support
 
-- **Documentation**: [https://pyzaplineplus.readthedocs.io/](https://pyzaplineplus.readthedocs.io/)
-- **Issues**: [GitHub Issues](https://github.com/SinaEsmaeili/PyZaplinePlus/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/SinaEsmaeili/PyZaplinePlus/discussions)
+- **Documentation**: https://snesmaeili.github.io/PyZapline_plus/
+- **Issues**: https://github.com/snesmaeili/PyZapline_plus/issues
+- **Discussions**: https://github.com/snesmaeili/PyZapline_plus/discussions
 - **Email**: [sina.esmaeili@umontreal.ca](mailto:sina.esmaeili@umontreal.ca)

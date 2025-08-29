@@ -2,12 +2,11 @@
 
 **🧠 Advanced Python library for automatic and adaptive removal of line noise from EEG data**
 
-[![PyPI version](https://badge.fury.io/py/pyzaplineplus.svg)](https://badge.fury.io/py/pyzaplineplus)
-[![Python Support](https://img.shields.io/pypi/pyversions/pyzaplineplus.svg)](https://pypi.org/project/pyzaplineplus/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Documentation](https://img.shields.io/badge/docs-latest-blue.svg)](https://sinaesmaeili.github.io/PyZaplinePlus/)
-[![Test Status](https://github.com/SinaEsmaeili/PyZaplinePlus/workflows/Test/badge.svg)](https://github.com/SinaEsmaeili/PyZaplinePlus/actions)
-[![Coverage](https://codecov.io/gh/SinaEsmaeili/PyZaplinePlus/branch/main/graph/badge.svg)](https://codecov.io/gh/SinaEsmaeili/PyZaplinePlus)
+[![PyPI - Version](https://img.shields.io/pypi/v/pyzaplineplus.svg)](https://pypi.org/project/pyzaplineplus/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/pyzaplineplus.svg)](https://pypi.org/project/pyzaplineplus/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-online-brightgreen.svg)](https://snesmaeili.github.io/PyZapline_plus/)
+[![CI](https://github.com/snesmaeili/PyZapline_plus/actions/workflows/ci.yml/badge.svg)](https://github.com/snesmaeili/PyZapline_plus/actions)
 
 PyZaplinePlus is a professional Python adaptation of the **Zapline-plus** library, designed to automatically remove spectral peaks like line noise from EEG data while preserving the integrity of the non-noise spectrum and maintaining the data rank. Unlike traditional notch filters, PyZaplinePlus uses sophisticated spectral detection and **Denoising Source Separation (DSS)** to identify and remove line noise components adaptively.
 
@@ -39,9 +38,9 @@ pip install pyzaplineplus
 ### From Source
 
 ```bash
-git clone https://github.com/SinaEsmaeili/PyZaplinePlus.git
-cd PyZaplinePlus
-pip install -e .
+git clone https://github.com/snesmaeili/PyZapline_plus.git
+cd PyZapline_plus
+pip install -e ".[dev]"
 ```
 
 ### With Optional Dependencies
@@ -214,13 +213,12 @@ PyZaplinePlus is released under the MIT License. See `LICENSE` for more details.
 ## Acknowledgments
 The PyZaplinePlus algorithm is inspired by the MATLAB-based Zapline-plus implementation, initially designed for removing line noise from EEG signals. Special thanks to the original authors and contributors who laid the foundation for this adaptive noise removal approach.
 
-## Detailed User Guide
-For a detailed guide on how to use PyZaplinePlus, including configuration options and how to interpret the cleaning plots, see the documentation site:
+## Documentation
+For full documentation, examples, and API reference, visit:
 
-- Installation: docs/user-guide/installation.md
-- Quick Start: docs/user-guide/quickstart.md
-- Examples: docs/user-guide/examples.md
-- API reference: docs/api/core.md
+- Full docs: https://snesmaeili.github.io/PyZapline_plus/
+- Examples: https://snesmaeili.github.io/PyZapline_plus/user-guide/examples/
+- API: https://snesmaeili.github.io/PyZapline_plus/api/
 
 ## Please Cite
 If you find PyZaplinePlus useful in your research, please cite the original papers:
@@ -230,17 +228,16 @@ If you find PyZaplinePlus useful in your research, please cite the original pape
 
 ## 📚 Documentation
 
-- **[Full Documentation](https://sinaesmaeili.github.io/PyZaplinePlus/)**: Complete guides and API reference
-- **[Installation Guide](https://sinaesmaeili.github.io/PyZaplinePlus/user-guide/installation/)**: Detailed installation instructions
-- **[Examples](https://sinaesmaeili.github.io/PyZaplinePlus/user-guide/examples/)**: Comprehensive usage examples
-- **[API Reference](https://sinaesmaeili.github.io/PyZaplinePlus/api/core/)**: Complete function documentation
+- **[Full Documentation](https://snesmaeili.github.io/PyZapline_plus/)**
+- **[Installation Guide](https://snesmaeili.github.io/PyZapline_plus/user-guide/installation/)**
+- **[Examples](https://snesmaeili.github.io/PyZapline_plus/user-guide/examples/)**
+- **[API Reference](https://snesmaeili.github.io/PyZapline_plus/api/)**
 
 ## 💬 Support & Community
 
-- **📖 Documentation**: [https://sinaesmaeili.github.io/PyZaplinePlus/](https://sinaesmaeili.github.io/PyZaplinePlus/)
-- **🐛 Bug Reports**: [GitHub Issues](https://github.com/SinaEsmaeili/PyZaplinePlus/issues)
-- **💡 Feature Requests**: [GitHub Discussions](https://github.com/SinaEsmaeili/PyZaplinePlus/discussions)
-- **❓ Questions**: [GitHub Discussions](https://github.com/SinaEsmaeili/PyZaplinePlus/discussions)
+- **📖 Documentation**: https://snesmaeili.github.io/PyZapline_plus/
+- **🐛 Issues**: https://github.com/snesmaeili/PyZapline_plus/issues
+- **💬 Discussions**: https://github.com/snesmaeili/PyZapline_plus/discussions
 - **📧 Email**: [sina.esmaeili@umontreal.ca](mailto:sina.esmaeili@umontreal.ca)
 
 ## 🏆 Related Projects

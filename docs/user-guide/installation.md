@@ -9,9 +9,9 @@ pip install pyzaplineplus
 ## From source
 
 ```bash
-git clone https://github.com/SinaEsmaeili/PyZaplinePlus
-cd PyZaplinePlus
-pip install -e .
+git clone https://github.com/snesmaeili/PyZapline_plus.git
+cd PyZapline_plus
+pip install -e ".[dev]"
 ```
 
 ## Optional extras
@@ -28,4 +28,3 @@ pip install pyzaplineplus[dev]
 
 - Python 3.8+
 - NumPy, SciPy, scikit-learn, Matplotlib
-
