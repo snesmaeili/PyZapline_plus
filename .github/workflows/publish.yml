@@ -31,7 +31,13 @@ jobs:
     
     - name: Test with pytest
       run: |
-        pytest tests/ -v --tb=short
+        pytest tests/ -v --tb=short --disable-warnings
+
+    - name: Test with coverage (Py3.10 only)
+      if: matrix.python-version == '3.10'
+      run: |
+        pip install pytest-cov
+        pytest tests/ --cov=pyzaplineplus --cov-report=xml --cov-report=term-missing --cov-fail-under=45
 
   publish:
     needs: test

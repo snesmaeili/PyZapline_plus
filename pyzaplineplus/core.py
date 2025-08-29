@@ -37,7 +37,8 @@ class PyZaplinePlus:
             'adaptiveNremove': kwargs.get('adaptiveNremove', True),
             'fixedNremove': kwargs.get('fixedNremove', 1),
             'detectionWinsize': kwargs.get('detectionWinsize', 6),
-            'coarseFreqDetectPowerDiff': kwargs.get('coarseFreqDetectPowerDiff', 7),
+            # Match MATLAB default: 4 (2.5x power over mean in dB scale)
+            'coarseFreqDetectPowerDiff': kwargs.get('coarseFreqDetectPowerDiff', 4),
             'coarseFreqDetectLowerPowerDiff': kwargs.get('coarseFreqDetectLowerPowerDiff', 1.76091259055681),
             'searchIndividualNoise': kwargs.get('searchIndividualNoise', True),
             'freqDetectMultFine': kwargs.get('freqDetectMultFine', 2),
@@ -76,14 +77,20 @@ class PyZaplinePlus:
         if self.transpose_data:
             self.data = self.data.T
 
-        # Adjust window size for spectrum calculation
-        if self.config['winSizeCompleteSpectrum'] * self.sampling_rate > self.data.shape[0]:
-            self.config['winSizeCompleteSpectrum'] = np.floor(self.data.shape[0] / self.sampling_rate)
-            print("Data set is short, results may be suboptimal!")
+        # Adjust window size for spectrum calculation to mirror MATLAB behavior
+        # MATLAB ensures at least 8 segments for pwelch by setting the window to ~1/8 of data length
+        if self.config['winSizeCompleteSpectrum'] * self.sampling_rate > (self.data.shape[0] / 8):
+            new_win = int(np.floor((self.data.shape[0] / self.sampling_rate) / 8))
+            self.config['winSizeCompleteSpectrum'] = max(new_win, 1)
+            print('Data set is short. Adjusted window size for whole data set spectrum calculation to be 1/8 of the length!')
 
         # Set nkeep
         if self.config['nkeep'] == 0:
             self.config['nkeep'] = self.data.shape[1]
+
+        # Track the minimum allowed fixedNremove to support adaptive updates
+        if 'baseFixedNremove' not in self.config:
+            self.config['baseFixedNremove'] = int(self.config.get('fixedNremove', 1))
             
         # Detect flat channels
         self.flat_channels = self.detect_flat_channels()
@@ -147,14 +154,24 @@ class PyZaplinePlus:
     def detect_line_noise(self):
         """
         Detect line noise (50 Hz or 60 Hz) in the data.
+
+        Notes:
+        - The MATLAB implementation searches within narrow bands around 50/60 Hz.
+          To robustly capture the true peak (which might fall exactly on-bin), we
+          use a slightly wider 2 Hz window: 49–51 Hz and 59–61 Hz.
         """
         if self.config['noisefreqs'] != 'line':
             return
-        idx = (self.f > 49) & (self.f < 51) | (self.f > 59) & (self.f < 61)
+        # Use a robust 2 Hz window around 50 Hz and 60 Hz
+        idx = ((self.f > 49) & (self.f < 51)) | ((self.f > 59) & (self.f < 61))
+        if not np.any(idx):
+            # As a fallback, try the original narrow bounds
+            idx = ((self.f > 49) & (self.f < 50)) | ((self.f > 59) & (self.f < 60))
         spectra_chunk = self.pxx_raw_log[idx, :]
-        max_val = np.max(spectra_chunk)
-        freq_idx = np.unravel_index(np.argmax(spectra_chunk), spectra_chunk.shape)[0]
-        noise_freq = self.f[idx][freq_idx]
+        # Flatten across channels and pick global maximum within the search band
+        flat_idx = np.argmax(spectra_chunk)
+        row_idx = np.unravel_index(flat_idx, spectra_chunk.shape)[0]
+        noise_freq = self.f[idx][row_idx]
         print(f"'noisefreqs' parameter was set to 'line', found line noise candidate at {noise_freq:.2f} Hz!")
         self.config['noisefreqs'] = []
         self.config['minfreq'] = noise_freq - self.config['detectionWinsize'] / 2
@@ -232,14 +249,14 @@ class PyZaplinePlus:
             cov_matrix = np.cov(segment, rowvar=0)
             covariance_matrices.append(cov_matrix)
         
-        # 4. Compute Distances Between Consecutive Covariance Matrices
+        # 4. Compute Distances Between Consecutive Covariance Matrices (match MATLAB)
+        # distances(i-1) = sum(pdist(C_i - C_{i-1})) / 2
         distances = []
         for i in range(1, len(covariance_matrices)):
             cov_diff = covariance_matrices[i] - covariance_matrices[i - 1]
-            # Flatten the covariance difference matrix
-            cov_diff_flat = cov_diff.flatten()
-            # Compute pairwise distances (Euclidean)
-            distance = np.linalg.norm(cov_diff_flat)
+            # Sum of pairwise distances across rows
+            d = pdist(cov_diff)
+            distance = np.sum(d) / 2.0
             distances.append(distance)
         distances = np.array(distances)
         
@@ -277,13 +294,13 @@ class PyZaplinePlus:
         # 9. Ensure All Chunks Meet Minimum Length
         min_length_samples = int(self.config['minChunkLength'] * self.sampling_rate)
         
-        # Check the first chunk (only if we have at least 2 chunk boundaries)
-        if len(chunk_indices) > 2 and chunk_indices[1] - chunk_indices[0] < min_length_samples:
-            chunk_indices.pop(1)  # Remove the first peak
-        
-        # Check the last chunk (only if we have at least 2 chunk boundaries)
-        if len(chunk_indices) > 2 and chunk_indices[-1] - chunk_indices[-2] < min_length_samples:
-            chunk_indices.pop(-2)  # Remove the last peak
+        # Check the first and last chunk only if we have at least two boundaries
+        if len(chunk_indices) > 2:
+            if chunk_indices[1] - chunk_indices[0] < min_length_samples:
+                chunk_indices.pop(1)  # Remove the first peak
+        if len(chunk_indices) > 2:
+            if chunk_indices[-1] - chunk_indices[-2] < min_length_samples:
+                chunk_indices.pop(-2)  # Remove the last peak
         
         # Sort and remove duplicates if any
         chunk_indices = sorted(list(set(chunk_indices)))
@@ -380,7 +397,9 @@ class PyZaplinePlus:
             # plt.savefig('dss_scores.png')
 
         # Step 6: Determine the number of components to remove
-        if self.config['adaptiveNremove']:
+        if scores is None or len(scores) == 0:
+            nremove = 0
+        elif self.config['adaptiveNremove']:
             adaptive_nremove, _ = self.iterative_outlier_removal(
                 scores,
                 self.config['noiseCompDetectSigma']
@@ -392,8 +411,9 @@ class PyZaplinePlus:
                 )
             else:
                 nremove = adaptive_nremove
+            # Cap removal to at most 1/5 of components, but ensure at least 1 when any components exist
             if nremove > len(scores) // 5:
-                nremove = len(scores) // 5
+                nremove = max(1, len(scores) // 5)
                 print(
                     f"nremove is larger than 1/5th of the components, using that ({nremove})!"
                 )
@@ -614,7 +634,9 @@ class PyZaplinePlus:
                     zapline_config['maxsigma']
                 )
                 cleaning_done = False
-                zapline_config['fixedNremove'] = max(zapline_config['fixedNremove'] - 1, zapline_config['fixedNremove'])
+                # Decrease current minimum components to remove, but never below the original baseline
+                base_min = int(zapline_config.get('baseFixedNremove', zapline_config.get('fixedNremove', 1)))
+                zapline_config['fixedNremove'] = max(int(zapline_config['fixedNremove']) - 1, base_min)
                 print(f"Cleaning too strong! Increasing sigma for noise component detection to {zapline_config['noiseCompDetectSigma']} "
                     f"and setting minimum number of removed components to {zapline_config['fixedNremove']}.")
                 return cleaning_done, zapline_config, cleaning_too_strong_once
@@ -2343,20 +2365,30 @@ class PyZaplinePlus:
 
         plt.tight_layout()
         plt.draw()
-        plt.savefig(os.path.join('pyZapline_plus', 'zapline_results.png'))
+        # Save figure to a standard location (figures/zapline_results.png)
+        out_dir = os.path.join(os.getcwd(), 'figures')
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+        except Exception:
+            pass
+        plt.savefig(os.path.join(out_dir, 'zapline_results.png'))
         return fig
 
 
 
 
     def run(self):
-        
         self.finalize_inputs()
         zapline_config = self.config.copy()
         analytics_results = {}
         plot_handles = []
+        # If no noise frequency is detected, return original data
+        clean_data = self.data.copy()
 
-        for noise_freq in zapline_config['noisefreqs']:
+        # Iterate like MATLAB: sequentially clean and optionally discover next freq after each pass
+        i_noise = 0
+        while i_noise < len(zapline_config['noisefreqs']):
+            noise_freq = zapline_config['noisefreqs'][i_noise]
             print(f"Removing noise at {noise_freq}Hz...")
             
             if self.config['chunkLength'] != 0:
@@ -2372,7 +2404,7 @@ class PyZaplinePlus:
             cleaning_too_strong_once=False
             while not cleaning_done:
                 clean_data = np.zeros_like(self.data)
-                scores = np.zeros((n_chunks, self.config['nkeep']))
+                scores = np.full((n_chunks, self.config['nkeep']), np.nan)
                 n_remove_final = np.zeros(n_chunks)
                 noise_peaks = np.zeros(n_chunks)
                 found_noise = np.zeros(n_chunks)
@@ -2388,17 +2420,23 @@ class PyZaplinePlus:
                     clean_chunk, n_remove, chunk_scores = self.apply_zapline_to_chunk(chunk, chunk_noise_freq)
                     clean_data[chunk_indices[i_chunk]:chunk_indices[i_chunk+1], :] = clean_chunk
                     
-                    scores[i_chunk, :] = chunk_scores
+                    # Store DSS scores for this chunk (pad/truncate to configured width like MATLAB)
+                    n_to_copy = min(scores.shape[1], len(chunk_scores))
+                    scores[i_chunk, :n_to_copy] = chunk_scores[:n_to_copy]
                     n_remove_final[i_chunk] = n_remove
                     noise_peaks[i_chunk] = chunk_noise_freq
                     found_noise[i_chunk] = 1 if chunk_noise_freq != noise_freq else 0
 
-                pxx_clean_log, f= self.compute_spectrum(clean_data)
-                # pxx_raw_log=   sel.compute_spectrum(self.data)
-                pxx_removed_log=self.compute_spectrum(self.data-clean_data)
+                pxx_clean_log, f = self.compute_spectrum(clean_data)
+                # For analytics we only need raw and clean; removed spectrum is computed for plotting later
                 
-                analytics = self.compute_analytics(self.pxx_raw_log, pxx_clean_log,f , noise_freq)
-                cleaning_done, zapline_config,cleaning_too_strong_once = self.adaptive_cleaning(clean_data, self.data, noise_freq,zapline_config,cleaning_too_strong_once)
+                analytics = self.compute_analytics(self.pxx_raw_log, pxx_clean_log, f, noise_freq)
+                cleaning_done, zapline_config, cleaning_too_strong_once = self.adaptive_cleaning(
+                    clean_data, self.data, noise_freq, zapline_config, cleaning_too_strong_once
+                )
+                # Propagate adaptive updates into the live config used by apply_zapline_to_chunk
+                self.config['noiseCompDetectSigma'] = zapline_config.get('noiseCompDetectSigma', self.config['noiseCompDetectSigma'])
+                self.config['fixedNremove'] = zapline_config.get('fixedNremove', self.config['fixedNremove'])
                 zapline_config['noisePeaks'] = noise_peaks
                 zapline_config['scores'] = scores
             if self.config['plotResults']:
@@ -2428,11 +2466,55 @@ class PyZaplinePlus:
                 **analytics
             }
 
+            # After finishing this frequency, optionally search for the next (MATLAB behavior)
+            if zapline_config.get('automaticFreqDetection', False):
+                # Start search just above the noise frequency + fine upper bound
+                start_minfreq = noise_freq + zapline_config.get('detailedFreqBoundsUpper', [-0.05, 0.05])[1]
+                nextfreq, _, _, _ = find_next_noisefreq(
+                    pxx_clean_log,
+                    f,
+                    start_minfreq,
+                    # Use the configured coarse threshold (MATLAB default: 4 dB)
+                    zapline_config.get('coarseFreqDetectPowerDiff', 4),
+                    zapline_config.get('detectionWinsize', 6),
+                    zapline_config.get('maxfreq', 99),
+                    zapline_config.get('coarseFreqDetectLowerPowerDiff', 1.76091259055681),
+                    verbose=False
+                )
+                if nextfreq is not None:
+                    zapline_config['noisefreqs'].append(nextfreq)
+
+            i_noise += 1
+
         if self.flat_channels.size > 0:
             clean_data = self.add_back_flat_channels(clean_data)
 
         if self.transpose_data:
             clean_data = clean_data.T
+
+        # If plotting requested but no noise was found/processed, create a simple 'No noise' figure
+        if self.config.get('plotResults', False) and len(plot_handles) == 0:
+            try:
+                import matplotlib.pyplot as plt
+                fig = plt.figure()
+                ax = fig.add_subplot(111)
+                ax.plot(self.f, np.mean(self.pxx_raw_log, axis=1), color=[0.2, 0.2, 0.2])
+                ax.grid(True, which='both', linestyle='--', linewidth=0.5)
+                ax.set_xlabel('Frequency (Hz)')
+                ax.set_ylabel('Power [10*log10 μV^2/Hz]')
+                ax.set_title('No noise found')
+                # save to same path as detailed figs for consistency
+                import os
+                plt.tight_layout()
+                out_dir = os.path.join(os.getcwd(), 'figures')
+                try:
+                    os.makedirs(out_dir, exist_ok=True)
+                except Exception:
+                    pass
+                plt.savefig(os.path.join(out_dir, 'zapline_results.png'))
+                plot_handles.append(fig)
+            except Exception:
+                pass
 
         return clean_data, zapline_config, analytics_results, plot_handles  
 

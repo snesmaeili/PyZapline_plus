@@ -45,7 +45,13 @@ jobs:
       if: matrix.python-version == '3.10'
       run: |
         pip install pytest-cov
-        pytest tests/ --cov=pyzaplineplus --cov-report=xml --cov-report=term-missing
+        pytest tests/ --cov=pyzaplineplus --cov-report=xml --cov-report=term-missing --cov-fail-under=45
+
+    - name: Build docs (mkdocs)
+      if: matrix.python-version == '3.10'
+      run: |
+        pip install mkdocs mkdocstrings[python] mkdocs-material
+        mkdocs build
     
     - name: Upload coverage to Codecov
       if: matrix.python-version == '3.10'
