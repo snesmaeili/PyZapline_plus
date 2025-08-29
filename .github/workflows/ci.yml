@@ -36,15 +36,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
       - run: python -m pip install -U pip build
       - run: python -m build
-      - name: Publish prerelease to TestPyPI
-        if: contains(github.ref_name, 'rc') || contains(github.ref_name, 'a') || contains(github.ref_name, 'b')
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          skip-existing: true
+
       - name: Publish release to PyPI
-        if: ${{ !contains(github.ref_name, 'rc') && !contains(github.ref_name, 'a') && !contains(github.ref_name, 'b') }}
         uses: pypa/gh-action-pypi-publish@release/v1
