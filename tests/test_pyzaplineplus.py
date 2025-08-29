@@ -417,7 +417,11 @@ class TestPerformance:
     def test_memory_efficiency(self):
         """Test memory usage doesn't explode."""
         import os
-        import psutil
+        try:
+            import psutil  # type: ignore
+        except Exception:  # pragma: no cover - skip if psutil not available
+            import pytest
+            pytest.skip("psutil not installed; skipping memory efficiency test")
 
         process = psutil.Process(os.getpid())
         initial_memory = process.memory_info().rss / 1024 / 1024  # MB
