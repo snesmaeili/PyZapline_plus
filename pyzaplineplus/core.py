@@ -1040,7 +1040,7 @@ class PyZaplinePlus:
                 else:
                     xx = trial_data.copy()  # Shape: (n_samples, n_channels)
                     if w is not None:
-                ww_min = trial_weight.copy()  # Shape: (n_samples, 1)
+                        ww_min = trial_weight.copy()  # Shape: (n_samples, 1)
                     else:
                         ww_min = np.ones((xx.shape[0], 1), dtype=np.float64)
 
