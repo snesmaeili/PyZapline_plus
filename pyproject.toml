@@ -15,7 +15,6 @@ keywords = ["EEG", "MEG", "BCI", "DSS", "line noise", "zapline"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.8",
   "Programming Language :: Python :: 3.9",
@@ -45,6 +44,7 @@ dev = [
   "check-manifest>=0.49",
   "mkdocs>=1.6",
   "mkdocs-material>=9.5",
+  "mkdocstrings[python]>=0.24",
 ]
 
 [project.urls]
