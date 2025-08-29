@@ -135,7 +135,7 @@ class PyZaplinePlus:
             
         noverlap = int(0.5 * nperseg)  # 50% overlap to match MATLAB's default behavior
 
-        f, pxx = signal.welch(data, 
+        f, pxx = signal.welch(data,
                             fs=self.sampling_rate,
                             window=windows.hann(nperseg,sym=True),
                             nperseg=nperseg,
@@ -202,7 +202,7 @@ class PyZaplinePlus:
             
             if current_minfreq >= self.config['maxfreq']:
                 break
-        self.config['thresh']=threshs     
+        self.config['thresh'] = threshs
         return noise_freqs
     def fixed_chunk_detection(self):
         """
@@ -225,10 +225,10 @@ class PyZaplinePlus:
         from scipy.spatial.distance import pdist
         # 1. Bandpass Filter the Data
         narrow_band_filtered = self.bandpass_filter(
-            self.data, 
-            noise_freq - self.config['detectionWinsize'] / 2, 
-            noise_freq + self.config['detectionWinsize'] / 2, 
-            self.sampling_rate
+            self.data,
+            noise_freq - self.config['detectionWinsize'] / 2,
+            noise_freq + self.config['detectionWinsize'] / 2,
+            self.sampling_rate,
         )
         
         # 2. Determine Segment Length and Number of Segments
@@ -543,7 +543,7 @@ class PyZaplinePlus:
         low = lowcut / nyquist
         high = highcut / nyquist
         b, a = signal.butter(order, [low, high], btype='band')
-        return signal.filtfilt(b, a, data, axis=0)        
+        return signal.filtfilt(b, a, data, axis=0)
 
     # def compute_analytics(self, pxx_raw, pxx_clean, f, noise_freq):
     #     pass
@@ -611,8 +611,8 @@ class PyZaplinePlus:
         cleaning_too_weak = proportion_above_upper > zapline_config['maxProportionAboveUpper']
         zapline_config['proportion_above_upper'] = proportion_above_upper
         
-        if cleaning_too_weak: 
-            print(f"Cleaning too weak! ")
+        if cleaning_too_weak:
+            print("Cleaning too weak! ")
         proportion_below_lower = np.sum(
             np.mean(pxx_clean_log[freq_idx_lower_check, :], axis=1) < remaining_noise_thresh_lower
         ) / np.sum(freq_idx_lower_check)
@@ -1089,7 +1089,7 @@ class PyZaplinePlus:
         """
         from scipy.sparse.linalg import eigsh
         from scipy.linalg import eigh
-        from numpy.linalg import eig
+        
         # Validate covariance matrix
         if not isinstance(cov, np.ndarray):
             raise TypeError("Covariance matrix 'cov' must be a numpy.ndarray.")
@@ -1283,11 +1283,11 @@ class PyZaplinePlus:
                     # Unfold x and w, multiply, fold back
                     x_weighted = self.nt_fold(
                         self.nt_vecmult(
-                            self.nt_unfold(x_truncated), 
-                            self.nt_unfold(weight[:y_shifted.shape[0], :])
-                        ), 
-                        m=data_x.shape[0]
-                    )[:y_shifted.shape[0], :]  # Ensure matching time dimension
+                            self.nt_unfold(x_truncated),
+                            self.nt_unfold(weight[:y_shifted.shape[0], :]),
+                        ),
+                        m=data_x.shape[0],
+                    )[: y_shifted.shape[0], :]  # Ensure matching time dimension
                     x_truncated = x_weighted  # Shape: (n_samples_shifted, n_channels_x)
 
                     # Update total weight
@@ -1359,11 +1359,11 @@ class PyZaplinePlus:
                     # Unfold x and w, multiply, fold back
                     x_weighted = self.nt_fold(
                         self.nt_vecmult(
-                            self.nt_unfold(x_truncated), 
-                            self.nt_unfold(trial_weight[:y_shifted.shape[0], :])
-                        ), 
-                        mx
-                    )[:y_shifted.shape[0], :]  # Ensure matching time dimension
+                            self.nt_unfold(x_truncated),
+                            self.nt_unfold(trial_weight[:y_shifted.shape[0], :]),
+                        ),
+                        mx,
+                    )[: y_shifted.shape[0], :]  # Ensure matching time dimension
 
                     x_truncated = x_weighted  # Shape: (n_samples_shifted, n_channels_x)
 
@@ -1473,7 +1473,7 @@ class PyZaplinePlus:
                 idx = min(idx, n_samples - nfft)
                 z = x[idx:idx + nfft, :, trial]  # (nfft, n_channels)
                 z = self.nt_vecmult(z,w)  # Apply Hann window
-                Z = fft(z, axis=0)   
+                Z = fft(z, axis=0)
                 Z=self.nt_vecmult(Z, filt)  # Apply filter
                 cov_matrix = np.real(np.dot(Z.conj().T, Z))  # (n_channels, n_channels)
                 c1 += cov_matrix
@@ -1638,9 +1638,7 @@ class PyZaplinePlus:
         wref[idx, :] = w
         
         # Remove weighted means
-        x0 = x.copy()
         x_demeaned, _ = self.nt_demean(x, wx)
-        mn1 = x_demeaned - x0
         ref_demeaned, _ = self.nt_demean(ref, wref)
         
         # Equalize power of ref channels, then equalize power of ref PCs
@@ -1663,9 +1661,7 @@ class PyZaplinePlus:
         z = ref_shifted @ r
         y = x[:z.shape[0], :] - z
         
-        y0 = y.copy()
         y_demeaned, _ = self.nt_demean(y, wx)  # Multishift(ref) is not necessarily zero mean
-        mn2 = y_demeaned - y0
         
         # idx for alignment
         idx_output = np.arange(offset1, offset1 + y.shape[0])
@@ -1705,7 +1701,7 @@ class PyZaplinePlus:
             y = y.reshape(y_shape)
             return y
 
-        # If m is 2D, perform simple matrix multiplication using    
+        # If m is 2D, perform simple matrix multiplication using
         if m.ndim == 2:
             y = self.nt_mmat0(x, m)
 
@@ -2059,7 +2055,7 @@ class PyZaplinePlus:
             threshold_old = threshold
             threshold = np.mean(data_vector) + sd_level * np.std(data_vector)
 
-        return n_remove, threshold  
+        return n_remove, threshold
     def generate_output_figures(self, data, clean_data, noise_freq, zapline_config, pxx_raw_log, pxx_clean_log, pxx_removed_log, f, analytics, NremoveFinal):
         """
         Generate figures to visualize the results, replicating the MATLAB figures with the same colors.
@@ -2446,7 +2442,7 @@ class PyZaplinePlus:
                                                         f=f,
                                                         analytics=analytics,
                                                         NremoveFinal=n_remove_final,
-                                                        )                                           
+                                                        )
                 if plot_handle:
                     plot_handles.append(plot_handle)
 
@@ -2509,7 +2505,7 @@ class PyZaplinePlus:
             except Exception:
                 pass
 
-        return clean_data, zapline_config, analytics_results, plot_handles  
+        return clean_data, zapline_config, analytics_results, plot_handles
 
     def add_back_flat_channels(self, clean_data):
         """

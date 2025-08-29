@@ -304,7 +304,7 @@ class TestIntegration:
         
         # Clean using zapline_plus
         clean_data, _, _, _ = zapline_plus(
-            mne_style_data, fs, 
+            mne_style_data, fs,
             plotResults=False
         )
         

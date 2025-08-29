@@ -7,7 +7,7 @@ This module contains functions for detecting line noise frequencies in EEG data.
 import numpy as np
 
 
-def find_next_noisefreq(pxx, f, minfreq=0, threshdiff=5, winsizeHz=3, maxfreq=None, 
+def find_next_noisefreq(pxx, f, minfreq=0, threshdiff=5, winsizeHz=3, maxfreq=None,
                        lower_threshdiff=1.76091259055681, verbose=False):
     """
     Find the next noise frequency in the power spectrum.
