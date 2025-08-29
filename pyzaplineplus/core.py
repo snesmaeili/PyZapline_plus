@@ -1,13 +1,8 @@
 import numpy as np
-from scipy import signal
-from scipy.spatial.distance import pdist
-from scipy.signal import find_peaks
-from sklearn.decomposition import PCA
-from .noise_detection import find_next_noisefreq
 from matplotlib import pyplot as plt
-import numpy as np
-from sklearn.decomposition import PCA
-from typing import Union, List, Optional, Tuple
+from scipy import signal
+from typing import List, Optional, Tuple, Union
+from .noise_detection import find_next_noisefreq
 class PyZaplinePlus:
     def __init__(self, data, sampling_rate, **kwargs):
         # Validate inputs
@@ -303,7 +298,7 @@ class PyZaplinePlus:
                 chunk_indices.pop(-2)  # Remove the last peak
         
         # Sort and remove duplicates if any
-        chunk_indices = sorted(list(set(chunk_indices)))
+        chunk_indices = sorted(set(chunk_indices))
         
         return chunk_indices
 
@@ -722,7 +717,7 @@ class PyZaplinePlus:
 
 
 
-    def nt_pca(self, x, shifts=[0], nkeep=None, threshold=0, w=None):
+    def nt_pca(self, x, shifts=None, nkeep=None, threshold=0, w=None):
         """
         Apply PCA with time shifts and retain a specified number of components.
 
@@ -743,9 +738,12 @@ class PyZaplinePlus:
         """
 
         # Ensure shifts is a numpy array
-        shifts = np.array(shifts).flatten()
-        if len(shifts) == 0:
+        if shifts is None:
             shifts = np.array([0])
+        else:
+            shifts = np.array(shifts).flatten()
+            if len(shifts) == 0:
+                shifts = np.array([0])
         if np.any(shifts < 0):
             raise ValueError("All shifts must be non-negative.")
 
@@ -913,7 +911,7 @@ class PyZaplinePlus:
             if w is not None and not isinstance(w, list):
                 raise ValueError("Weights `w` must be a list if `x` is a list (cell array).")
             
-            o = len(x)  # Number of cells/trials
+            # Number of cells/trials not required explicitly here
             # Determine number of channels
             if len(x) == 0:
                 raise ValueError("Input list `x` is empty.")
@@ -987,7 +985,7 @@ class PyZaplinePlus:
         elif isinstance(x, np.ndarray):
             # Handle NumPy array input
             data = x.copy()
-            original_shape = data.shape
+            # original_shape not used; keep minimal state
 
             # Determine data dimensionality
             if data.ndim == 1:
@@ -1175,7 +1173,6 @@ class PyZaplinePlus:
                 - tw: total weight.
         """
         if x.ndim == 2 and y.ndim == 2:
-            n_old_dim=2
             x=x[:,:,np.newaxis]
             y=y[:,:,np.newaxis]
             w=w[:,:,np.newaxis]
@@ -1222,8 +1219,7 @@ class PyZaplinePlus:
                 raise ValueError("Input list `x` is empty.")
             
             # Determine number of channels from the first cell
-            first_x_shape = x[0].shape
-            first_y_shape = y[0].shape
+            # shapes of first elements inferred below when needed
             if x[0].ndim == 1:
                 n_channels_x = 1
             elif x[0].ndim == 2:
@@ -1486,7 +1482,7 @@ class PyZaplinePlus:
     def nt_dss0(self, c0, c1, keep1=None, keep2=10**-9):
         """
         Compute DSS from covariance matrices.
-        
+
         Parameters:
         - c0: baseline covariance
         - c1: biased covariance
@@ -1541,7 +1537,7 @@ class PyZaplinePlus:
     def nt_tsr(self, x, ref, shifts=None, wx=None, wref=None, keep=None, thresh=1e-20):
         """
         Perform time-shift regression (TSPCA) to denoise data.
-        
+
         Parameters:
             x (np.ndarray): Data to denoise (time x channels x trials).
             ref (np.ndarray): Reference data (time x channels x trials).
@@ -1550,7 +1546,7 @@ class PyZaplinePlus:
             wref (np.ndarray): Weights to apply to ref (time x 1 x trials).
             keep (int): Number of shifted-ref PCs to retain (default: all).
             thresh (float): Threshold to ignore small shifted-ref PCs (default: 1e-20).
-        
+
         Returns:
             y (np.ndarray): Denoised data.
             idx (np.ndarray): Indices where x(idx) is aligned with y.
@@ -1616,9 +1612,7 @@ class PyZaplinePlus:
             mref, nref, oref = ref.shape
         elif x.ndim == 2:
             mx, nx = x.shape
-            ox = 1
             mref, nref = ref.shape
-            oref=1
         else:
             raise ValueError('x should be 2D or 3D')
        
@@ -1675,7 +1669,6 @@ class PyZaplinePlus:
         
         # idx for alignment
         idx_output = np.arange(offset1, offset1 + y.shape[0])
-        mn = mn1 + mn2
         w = wref
         
         # Return outputs
@@ -2521,7 +2514,7 @@ class PyZaplinePlus:
     def add_back_flat_channels(self, clean_data):
         """
         Add back flat channels that were removed during preprocessing.
-        
+
         Parameters:
             clean_data (np.ndarray): Cleaned data with flat channels removed
             

@@ -1,8 +1,8 @@
 """
 PyZaplinePlus: Advanced Python library for automatic and adaptive removal of line noise from EEG data.
 
-PyZaplinePlus is a Python adaptation of the Zapline-plus library, designed to automatically 
-remove spectral peaks like line noise from EEG data while preserving the integrity of the 
+PyZaplinePlus is a Python adaptation of the Zapline-plus library, designed to automatically
+remove spectral peaks like line noise from EEG data while preserving the integrity of the
 non-noise spectrum and maintaining the data rank.
 
 Main Functions:
@@ -12,24 +12,24 @@ Main Functions:
 Example:
     >>> import numpy as np
     >>> from pyzaplineplus import zapline_plus
-    >>> 
+    >>>
     >>> # Generate sample data
     >>> data = np.random.randn(10000, 64)  # 10000 samples, 64 channels
     >>> sampling_rate = 1000
-    >>> 
+    >>>
     >>> # Clean the data
-    >>> cleaned_data = zapline_plus(data, sampling_rate)
+    >>> cleaned_data, *_ = zapline_plus(data, sampling_rate)
 """
 
+from ._version import __version__
 from .core import PyZaplinePlus, zapline_plus
 from .noise_detection import find_next_noisefreq
-from ._version import __version__
 
 __all__ = [
     "PyZaplinePlus",
-    "zapline_plus", 
+    "zapline_plus",
     "find_next_noisefreq",
-    "__version__"
+    "__version__",
 ]
 
 # Package metadata

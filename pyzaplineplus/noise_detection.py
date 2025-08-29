@@ -11,10 +11,10 @@ def find_next_noisefreq(pxx, f, minfreq=0, threshdiff=5, winsizeHz=3, maxfreq=No
                        lower_threshdiff=1.76091259055681, verbose=False):
     """
     Find the next noise frequency in the power spectrum.
-    
+
     This function searches for noise frequencies by analyzing the power spectral density
     and identifying peaks that exceed a threshold relative to surrounding frequencies.
-    
+
     Parameters
     ----------
     pxx : ndarray
@@ -33,7 +33,7 @@ def find_next_noisefreq(pxx, f, minfreq=0, threshdiff=5, winsizeHz=3, maxfreq=No
         Lower threshold difference for continued detection (default: 1.76091259055681).
     verbose : bool, optional
         Whether to print verbose output and show plots (default: False).
-        
+
     Returns
     -------
     noisefreq : float or None
@@ -44,7 +44,7 @@ def find_next_noisefreq(pxx, f, minfreq=0, threshdiff=5, winsizeHz=3, maxfreq=No
         Power data of the analyzed window.
     threshfound : float or None
         The threshold that was used for detection.
-        
+
     Examples
     --------
     >>> import numpy as np

@@ -1,15 +1,15 @@
 """
 Test suite for PyZaplinePlus.
-
+        
 This module contains unit tests and integration tests for the PyZaplinePlus library.
 """
-
+        
 import numpy as np
 import pytest
 from scipy import signal
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend for testing
-
+    
 from pyzaplineplus import PyZaplinePlus, zapline_plus, find_next_noisefreq
 
 
@@ -416,9 +416,9 @@ class TestPerformance:
     
     def test_memory_efficiency(self):
         """Test memory usage doesn't explode."""
-        import psutil
         import os
-        
+        import psutil
+
         process = psutil.Process(os.getpid())
         initial_memory = process.memory_info().rss / 1024 / 1024  # MB
         
@@ -436,7 +436,7 @@ class TestPerformance:
                 noisefreqs=[50],
                 plotResults=False
             )
-            
+
             del clean_data, data  # Explicit cleanup
         
         final_memory = process.memory_info().rss / 1024 / 1024  # MB
