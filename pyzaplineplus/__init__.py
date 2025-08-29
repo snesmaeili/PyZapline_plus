@@ -23,7 +23,7 @@ Example:
 
 try:
     # Prefer version from package metadata (setuptools-scm)
-    from importlib.metadata import version as _pkg_version  # type: ignore
+    from importlib.metadata import version as _pkg_version
 
     __version__ = _pkg_version("pyzaplineplus")
 except Exception:  # pragma: no cover - fallback for editable installs without metadata

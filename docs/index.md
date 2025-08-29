@@ -4,7 +4,7 @@
 
 [![PyPI - Version](https://img.shields.io/pypi/v/pyzaplineplus.svg)](https://pypi.org/project/pyzaplineplus/)
 [![Python Versions](https://img.shields.io/pypi/pyversions/pyzaplineplus.svg)](https://pypi.org/project/pyzaplineplus/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](../about/license.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](about/license.md)
 [![CI](https://github.com/snesmaeili/PyZapline_plus/actions/workflows/ci.yml/badge.svg)](https://github.com/snesmaeili/PyZapline_plus/actions)
 
 ---

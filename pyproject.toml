@@ -7,7 +7,7 @@ name = "pyzaplineplus"
 description = "Adaptive removal of spectral line-noise in EEG via DSS (Zapline-plus reimplementation)."
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.8"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 authors = [
   { name = "Sina Esmaeili", email = "sina.esmaeili@umontreal.ca" }
 ]
@@ -142,3 +142,13 @@ exclude_lines = [
     "class .*\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
 ]
+
+[tool.mypy]
+python_version = "3.9"
+packages = ["pyzaplineplus"]
+ignore_missing_imports = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = false
+no_implicit_optional = true
+check_untyped_defs = true

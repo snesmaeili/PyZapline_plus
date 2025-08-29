@@ -119,7 +119,7 @@ def find_next_noisefreq(pxx, f, minfreq=0, threshdiff=5, winsizeHz=3, maxfreq=No
             detectionstart = True
         elif detectionstart and detected and not detectednew:
             # Handle multiple maxima
-            max_value = np.max(meandata[i_startdetected:i_enddetected + 1])
+            max_value: float = float(np.max(meandata[i_startdetected:i_enddetected + 1]))
             max_indices = np.where(meandata[i_startdetected:i_enddetected + 1] == max_value)[0]
             noisefreq = f[max_indices[0] + i_startdetected]
             if verbose:
@@ -128,8 +128,8 @@ def find_next_noisefreq(pxx, f, minfreq=0, threshdiff=5, winsizeHz=3, maxfreq=No
                     import matplotlib.pyplot as plt
                     plt.figure()
                     plt.plot(thisfreqs, thisdata)
-                    plt.axhline(y=thresh, color='r', linestyle='-')
-                    plt.axhline(y=center_thisdata, color='k', linestyle='-')
+                    plt.axhline(y=float(thresh), color='r', linestyle='-')
+                    plt.axhline(y=float(center_thisdata), color='k', linestyle='-')
                     plt.title(str(noisefreq))
                     plt.xlabel('Frequency (Hz)')
                     plt.ylabel('Power (dB)')

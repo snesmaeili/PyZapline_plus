@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot as plt
 from scipy import signal
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, cast
 from .noise_detection import find_next_noisefreq
 class PyZaplinePlus:
     def __init__(self, data, sampling_rate, **kwargs):
@@ -36,15 +36,15 @@ class PyZaplinePlus:
             'coarseFreqDetectPowerDiff': kwargs.get('coarseFreqDetectPowerDiff', 4),
             'coarseFreqDetectLowerPowerDiff': kwargs.get('coarseFreqDetectLowerPowerDiff', 1.76091259055681),
             'searchIndividualNoise': kwargs.get('searchIndividualNoise', True),
-            'freqDetectMultFine': kwargs.get('freqDetectMultFine', 2),
+            'freqDetectMultFine': kwargs.get('freqDetectMultFine', 2.0),
             'detailedFreqBoundsUpper': kwargs.get('detailedFreqBoundsUpper', [-0.05, 0.05]),
             'detailedFreqBoundsLower': kwargs.get('detailedFreqBoundsLower', [-0.4, 0.1]),
             'maxProportionAboveUpper': kwargs.get('maxProportionAboveUpper', 0.005),
             'maxProportionBelowLower': kwargs.get('maxProportionBelowLower', 0.005),
-            'noiseCompDetectSigma': kwargs.get('noiseCompDetectSigma', 3),
-            'adaptiveSigma': kwargs.get('adaptiveSigma', 1),
+            'noiseCompDetectSigma': kwargs.get('noiseCompDetectSigma', 3.0),
+            'adaptiveSigma': kwargs.get('adaptiveSigma', True),
             'minsigma': kwargs.get('minsigma', 2.5),
-            'maxsigma': kwargs.get('maxsigma', 5),  # Changed to 5
+            'maxsigma': kwargs.get('maxsigma', 5.0),  # Changed to 5
             'chunkLength': kwargs.get('chunkLength', 0),
             'minChunkLength': kwargs.get('minChunkLength', 30),
             'winSizeCompleteSpectrum': kwargs.get('winSizeCompleteSpectrum', 300),
@@ -241,7 +241,7 @@ class PyZaplinePlus:
             start_idx = i * segment_length_samples
             end_idx = (i + 1) * segment_length_samples if i != n_segments - 1 else len(narrow_band_filtered)
             segment = narrow_band_filtered[start_idx:end_idx, :]
-            cov_matrix = np.cov(segment, rowvar=0)
+            cov_matrix = np.cov(segment, rowvar=False)
             covariance_matrices.append(cov_matrix)
         
         # 4. Compute Distances Between Consecutive Covariance Matrices (match MATLAB)
@@ -261,9 +261,9 @@ class PyZaplinePlus:
         
         # 6. Determine Prominence Threshold Based on Quantile
         if len(prominences) == 0:
-            prominence_threshold = np.inf  # No peaks found
+            prominence_threshold: float = float('inf')  # No peaks found
         else:
-            prominence_threshold = np.quantile(prominences, self.config['prominenceQuantile'])
+            prominence_threshold: float = float(np.quantile(prominences, self.config['prominenceQuantile']))
         
         # 7. Second Find Peaks Using Prominence Threshold
         min_peak_distance_segments = int(np.ceil(self.config['minChunkLength'] / self.config['segmentLength']))
@@ -320,7 +320,7 @@ class PyZaplinePlus:
         lower_quantile = np.mean([np.quantile(fine_data[:third], 0.05), np.quantile(fine_data[-third:], 0.05)])
         detailed_thresh = center_data + self.config['freqDetectMultFine'] * (center_data - lower_quantile)
         
-        max_fine_power = np.max(np.mean(pxx_log[detailed_freq_idx, :], axis=1))
+        max_fine_power: float = float(np.max(np.mean(pxx_log[detailed_freq_idx, :], axis=1)))
         if max_fine_power > detailed_thresh:
             return detailed_freqs[np.argmax(np.mean(pxx_log[detailed_freq_idx, :], axis=1))]
         return noise_freq
@@ -605,17 +605,21 @@ class PyZaplinePlus:
         zapline_config['thisFreqidxLowercheck'] = freq_idx_lower_check
         
         # Proportions for cleaning assessment
-        proportion_above_upper = np.sum(
+        numerator_upper = float(np.sum(
             np.mean(pxx_clean_log[freq_idx_upper_check, :], axis=1) > remaining_noise_thresh_upper
-        ) / np.sum(freq_idx_upper_check)
+        ))
+        denominator_upper = float(np.sum(freq_idx_upper_check)) or 1.0
+        proportion_above_upper = numerator_upper / denominator_upper
         cleaning_too_weak = proportion_above_upper > zapline_config['maxProportionAboveUpper']
         zapline_config['proportion_above_upper'] = proportion_above_upper
         
         if cleaning_too_weak:
             print("Cleaning too weak! ")
-        proportion_below_lower = np.sum(
+        numerator_lower = float(np.sum(
             np.mean(pxx_clean_log[freq_idx_lower_check, :], axis=1) < remaining_noise_thresh_lower
-        ) / np.sum(freq_idx_lower_check)
+        ))
+        denominator_lower = float(np.sum(freq_idx_lower_check)) or 1.0
+        proportion_below_lower = numerator_lower / denominator_lower
         cleaning_too_strong = proportion_below_lower > zapline_config['maxProportionBelowLower']
         zapline_config['proportion_below_lower'] = proportion_below_lower
 
@@ -748,7 +752,8 @@ class PyZaplinePlus:
             raise ValueError("All shifts must be non-negative.")
 
         # Adjust shifts to make them non-negative
-        offset = max(0, -np.min(shifts))
+        min_shift: int = int(np.min(shifts))
+        offset = max(0, -min_shift)
         shifts = shifts + offset
         idx = offset + np.arange(x.shape[0] - max(shifts))  # x[idx] maps to z
         # Determine if x is numeric or list (cell-like)
@@ -840,8 +845,8 @@ class PyZaplinePlus:
         if nshifts == 1 and shifts[0] == 0:
             return x.squeeze(axis=-1)
 
-        max_shift = np.max(shifts)
-        N = m - max_shift  # Number of samples after shifting
+        max_shift: int = int(np.max(shifts))
+        N: int = m - max_shift  # Number of samples after shifting
 
         # Initialize output array
         z = np.empty((N, n * nshifts, o), dtype=x.dtype)
@@ -866,7 +871,7 @@ class PyZaplinePlus:
     def nt_cov(
         self,
         x: Union[np.ndarray, List[np.ndarray]],
-        shifts: Union[List[int], np.ndarray]=0,
+        shifts: Optional[Union[List[int], np.ndarray]] = None,
         w: Optional[Union[np.ndarray, List[np.ndarray]]] = None
     ) -> Tuple[np.ndarray, float]:
         """
@@ -892,7 +897,11 @@ class PyZaplinePlus:
                 - tw: total weight (float).
         """
         # Convert shifts to a NumPy array and flatten to 1D
-        shifts = np.asarray(shifts).flatten()
+        if shifts is None:
+            shifts = np.array([0])
+        else:
+            shifts = np.asarray(shifts).flatten()
+        shifts = cast(np.ndarray, shifts)
         if np.any(shifts < 0):
             raise ValueError("Shifts must be non-negative integers.")
         nshifts = len(shifts)
@@ -1009,10 +1018,14 @@ class PyZaplinePlus:
                 if data.ndim == 3:
                     trial_data = data[:, :, trial]  # Shape: (n_samples, n_channels)
                     if w is not None:
+                        if not isinstance(w, np.ndarray):
+                            raise TypeError("Weights `w` must be a numpy.ndarray when `x` is a numpy.ndarray.")
                         trial_weight = w[:, trial]  # Shape: (n_samples,)
                 else:
                     trial_data = data.copy()  # Shape: (n_samples, n_channels)
                     if w is not None:
+                        if not isinstance(w, np.ndarray):
+                            raise TypeError("Weights `w` must be a numpy.ndarray when `x` is a numpy.ndarray.")
                         trial_weight = w.copy()  # Shape: (n_samples, 1)
 
                 # Apply shifts
@@ -1027,7 +1040,7 @@ class PyZaplinePlus:
                 else:
                     xx = trial_data.copy()  # Shape: (n_samples, n_channels)
                     if w is not None:
-                        ww_min = trial_weight.copy()  # Shape: (n_samples, 1)
+                ww_min = trial_weight.copy()  # Shape: (n_samples, 1)
                     else:
                         ww_min = np.ones((xx.shape[0], 1), dtype=np.float64)
 
@@ -1172,14 +1185,21 @@ class PyZaplinePlus:
                 - c: cross-covariance matrix.
                 - tw: total weight.
         """
-        if x.ndim == 2 and y.ndim == 2:
-            x=x[:,:,np.newaxis]
-            y=y[:,:,np.newaxis]
-            w=w[:,:,np.newaxis]
+        # If numpy arrays are 2D, expand to 3D for consistent processing
+        if isinstance(x, np.ndarray) and isinstance(y, np.ndarray):
+            if x.ndim == 2 and y.ndim == 2:
+                x = x[:, :, np.newaxis]
+                y = y[:, :, np.newaxis]
+                if w is not None:
+                    if not isinstance(w, np.ndarray):
+                        raise TypeError("Weights `w` must be a numpy.ndarray when `x`/`y` are numpy.ndarray types.")
+                    if w.ndim == 2:
+                        w = w[:, :, np.newaxis]
         if shifts is None:
             shifts = np.array([0])
         else:
             shifts = np.asarray(shifts).flatten()
+        shifts = cast(np.ndarray, shifts)
 
         if np.any(shifts < 0):
             raise ValueError('Shifts must be non-negative integers')
@@ -1195,11 +1215,14 @@ class PyZaplinePlus:
                 raise ValueError("Arrays `x` and `y` must have the same number of dimensions.")
             if x.shape[0] != y.shape[0]:
                 raise ValueError("`x` and `y` must have the same number of time samples.")
-            if x.ndim >2:
+            if x.ndim > 2:
                 if x.shape[2] != y.shape[2]:
                     raise ValueError("`x` and `y` must have the same number of trials.")
-                if w is not None and x.shape[2] != w.shape[2]:
-                    raise ValueError("`x` and `w` must have the same number of trials.")
+                if w is not None:
+                    if not isinstance(w, np.ndarray):
+                        raise TypeError("Weights `w` must be a numpy.ndarray when `x`/`y` are numpy.ndarray types.")
+                    if x.shape[2] != w.shape[2]:
+                        raise ValueError("`x` and `w` must have the same number of trials.")
         else:
             raise TypeError("`x` and `y` must both be either lists or numpy.ndarray types.")
 
@@ -1286,7 +1309,7 @@ class PyZaplinePlus:
                             self.nt_unfold(x_truncated),
                             self.nt_unfold(weight[:y_shifted.shape[0], :]),
                         ),
-                        m=data_x.shape[0],
+                        data_x.shape[0],
                     )[: y_shifted.shape[0], :]  # Ensure matching time dimension
                     x_truncated = x_weighted  # Shape: (n_samples_shifted, n_channels_x)
 
@@ -1346,6 +1369,8 @@ class PyZaplinePlus:
 
                 if w is not None:
                     # Extract weights for this trial and truncate
+                    if not isinstance(w, np.ndarray):
+                        raise TypeError("Weights `w` must be a numpy.ndarray when `x`/`y` are numpy.ndarray types.")
                     trial_weight = w[:, :, trial]  # Shape: (n_samples, channels or 1)
                     # if w.ndim == 2:
                     #     # For 3D `x`, weights are 2D (time x trials)
@@ -1414,7 +1439,7 @@ class PyZaplinePlus:
             raise ValueError("nfft too large")
 
         # Initialize Filter
-        filt = np.zeros(nfft // 2 + 1)
+        filt: np.ndarray = np.zeros(nfft // 2 + 1)
 
         if freq.ndim == 1:
             for k in range(freq.shape[0]):
@@ -1433,10 +1458,10 @@ class PyZaplinePlus:
             raise ValueError("freq should have one or two rows")
 
         # Symmetrize the Filter
-        filt = np.concatenate([filt, np.flip(filt[1:-1])])
+        filt_full = np.concatenate([filt, np.flip(filt[1:-1])])
 
         # Hann Window
-        w = windows.hann(nfft,sym=False)
+        w = windows.hann(nfft, sym=False)
 
         # Handle 2D and 3D Data
         if x.ndim == 2:
@@ -1474,7 +1499,7 @@ class PyZaplinePlus:
                 z = x[idx:idx + nfft, :, trial]  # (nfft, n_channels)
                 z = self.nt_vecmult(z,w)  # Apply Hann window
                 Z = fft(z, axis=0)
-                Z=self.nt_vecmult(Z, filt)  # Apply filter
+                Z = self.nt_vecmult(Z, filt_full)  # Apply filter
                 cov_matrix = np.real(np.dot(Z.conj().T, Z))  # (n_channels, n_channels)
                 c1 += cov_matrix
 
@@ -2044,16 +2069,16 @@ class PyZaplinePlus:
         """
         Remove outliers in a vector based on an iterative sigma threshold approach.
         """
-        threshold_old = np.max(data_vector)
-        threshold = np.mean(data_vector) + sd_level * np.std(data_vector)
-        n_remove = 0
+        threshold_old: float = float(np.max(data_vector))
+        threshold: float = float(np.mean(data_vector) + sd_level * np.std(data_vector))
+        n_remove: int = 0
 
         while threshold < threshold_old:
             flagged_points = data_vector > threshold
             data_vector = data_vector[~flagged_points]
             n_remove += np.sum(flagged_points)
             threshold_old = threshold
-            threshold = np.mean(data_vector) + sd_level * np.std(data_vector)
+            threshold = float(np.mean(data_vector) + sd_level * np.std(data_vector))
 
         return n_remove, threshold
     def generate_output_figures(self, data, clean_data, noise_freq, zapline_config, pxx_raw_log, pxx_clean_log, pxx_removed_log, f, analytics, NremoveFinal):
@@ -2111,7 +2136,7 @@ class PyZaplinePlus:
 
         # Plot original power on ax1
         ax1.plot(f[this_freq_idx_plot], np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1), color=grey)
-        ax1.set_xlim([f[this_freq_idx_plot][0] - 0.01, f[this_freq_idx_plot][-1]])
+        ax1.set_xlim((float(f[this_freq_idx_plot][0] - 0.01), float(f[this_freq_idx_plot][-1])))
 
         # Y-axis limits
         remaining_noise_thresh_lower = zapline_config.get('remaining_noise_thresh_lower', None)
@@ -2120,11 +2145,11 @@ class PyZaplinePlus:
         if remaining_noise_thresh_lower is not None and remaining_noise_thresh_upper is not None and coarse_freq_detect_power_diff is not None:
             ylim_lower = remaining_noise_thresh_lower - 0.25 * (remaining_noise_thresh_upper - remaining_noise_thresh_lower)
             ylim_upper = np.min(np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1)) + coarse_freq_detect_power_diff * 2
-            ax1.set_ylim([ylim_lower, ylim_upper])
+            ax1.set_ylim((float(ylim_lower), float(ylim_upper)))
         else:
-            y_min = np.min(np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1))
-            y_max = np.max(np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1))
-            ax1.set_ylim([y_min - 0.25 * (y_max - y_min), y_max + 0.25 * (y_max - y_min)])
+            y_min: float = float(np.min(np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1)))
+            y_max: float = float(np.max(np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1)))
+            ax1.set_ylim((float(y_min - 0.25 * (y_max - y_min)), float(y_max + 0.25 * (y_max - y_min))))
 
         ax1.spines['top'].set_visible(False)
         ax1.spines['right'].set_visible(False)
@@ -2171,8 +2196,8 @@ class PyZaplinePlus:
                     alpha=0.5
                 )
 
-        ax2.set_xlim([chunk_indices_plot[0], chunk_indices_plot[-1]])
-        ax2.set_ylim([0, max(NremoveFinal) + 1])
+        ax2.set_xlim((float(chunk_indices_plot[0]), float(chunk_indices_plot[-1])))
+        ax2.set_ylim((0.0, float(max(NremoveFinal) + 1)))
         n_chunks = len(NremoveFinal)
         ax2.set_title(f'# removed comps in {n_chunks} chunks, μ = {round(np.mean(NremoveFinal), 2)}')
         ax2.tick_params(labelsize=12)
@@ -2195,11 +2220,11 @@ class PyZaplinePlus:
             )
 
         ax3.plot(chunk_indices_plot_individual, noise_peaks, color=grey)
-        ax3.set_xlim([chunk_indices_plot[0], chunk_indices_plot[-1]])
+        ax3.set_xlim((float(chunk_indices_plot[0]), float(chunk_indices_plot[-1])))
         max_diff = max([(max(noise_peaks)) - noise_freq, noise_freq - (min(noise_peaks))])
         if max_diff == 0:
             max_diff = 0.01
-        ax3.set_ylim([noise_freq - max_diff * 1.5, noise_freq + max_diff * 1.5])
+        ax3.set_ylim((float(noise_freq - max_diff * 1.5), float(noise_freq + max_diff * 1.5)))
         ax3.set_xlabel('Time [minutes]')
         ax3.set_title('Individual noise frequencies [Hz]')
         ax3.tick_params(labelsize=12)
@@ -2225,7 +2250,7 @@ class PyZaplinePlus:
 
         mean_Nremove = np.mean(NremoveFinal) + 1
         ax4.plot([mean_Nremove, mean_Nremove], ax4.get_ylim(), color=red)
-        ax4.set_xlim([0.7, round(scores.shape[1] / 3)])
+        ax4.set_xlim((0.7, float(round(scores.shape[1] / 3))))
         adaptive_nremove = zapline_config.get('adaptiveNremove', False)
         noise_comp_detect_sigma = zapline_config.get('noiseCompDetectSigma', None)
         if adaptive_nremove and noise_comp_detect_sigma is not None:
@@ -2240,7 +2265,7 @@ class PyZaplinePlus:
 
         # Plot new power on ax5
         ax5.plot(f[this_freq_idx_plot], np.mean(pxx_clean_log[this_freq_idx_plot, :], axis=1), color=green)
-        ax5.set_xlim([f[this_freq_idx_plot][0] - 0.01, f[this_freq_idx_plot][-1]])
+        ax5.set_xlim((float(f[this_freq_idx_plot][0] - 0.01), float(f[this_freq_idx_plot][-1])))
 
         # Plot thresholds
         this_freq_idx_upper_check = zapline_config.get('thisFreqidxUppercheck', None)
@@ -2276,11 +2301,11 @@ class PyZaplinePlus:
         if remaining_noise_thresh_lower is not None and remaining_noise_thresh_upper is not None and coarse_freq_detect_power_diff is not None:
             ylim_lower = remaining_noise_thresh_lower - 0.25 * (remaining_noise_thresh_upper - remaining_noise_thresh_lower)
             ylim_upper = np.min(np.mean(pxx_raw_log[this_freq_idx_plot, :], axis=1)) + coarse_freq_detect_power_diff * 2
-            ax5.set_ylim([ylim_lower, ylim_upper])
+            ax5.set_ylim((float(ylim_lower), float(ylim_upper)))
         else:
             y_min = np.min(np.mean(pxx_clean_log[this_freq_idx_plot, :], axis=1))
             y_max = np.max(np.mean(pxx_clean_log[this_freq_idx_plot, :], axis=1))
-            ax5.set_ylim([y_min - 0.25 * (y_max - y_min), y_max + 0.25 * (y_max - y_min)])
+            ax5.set_ylim((float(y_min - 0.25 * (y_max - y_min)), float(y_max + 0.25 * (y_max - y_min))))
 
         ax5.set_xlabel('Frequency (Hz)')
         ax5.set_ylabel('Power [10*log10 μV^2/Hz]')
@@ -2311,10 +2336,10 @@ class PyZaplinePlus:
         ax7.set_ylabel('')
         ylimits2 = ax7.get_ylim()
         ylimits = [min(ylimits1[0], ylimits2[0]), max(ylimits1[1], ylimits2[1])]
-        ax6.set_ylim(ylimits)
-        ax7.set_ylim(ylimits)
-        ax6.set_xlim([np.min(f) - np.max(f) * 0.0032, np.max(f)])
-        ax7.set_xlim([np.min(f / noise_freq) - np.max(f / noise_freq) * 0.003, np.max(f / noise_freq)])
+        ax6.set_ylim(tuple(map(float, ylimits)))
+        ax7.set_ylim(tuple(map(float, ylimits)))
+        ax6.set_xlim((float(np.min(f) - np.max(f) * 0.0032), float(np.max(f))))
+        ax7.set_xlim((float(np.min(f / noise_freq) - np.max(f / noise_freq) * 0.003), float(np.max(f / noise_freq))))
         proportion_removed_noise = analytics.get('proportion_removed_noise', None)
         ratio_noise_clean = analytics.get('ratio_noise_clean', None)
         ax7.set_title(f'Removed power at noise frequency: {proportion_removed_noise * 100:.2f}%\nRatio of noise to surroundings: {ratio_noise_clean:.2f}')
@@ -2347,7 +2372,7 @@ class PyZaplinePlus:
         ax8.set_xlabel('Frequency')
         ax8.spines['top'].set_visible(False)
         ax8.spines['right'].set_visible(False)
-        ax8.set_xlim([np.min(f[this_freq_idx_belownoise]), np.max(f[this_freq_idx_belownoise])])
+        ax8.set_xlim((float(np.min(f[this_freq_idx_belownoise])), float(np.max(f[this_freq_idx_belownoise]))))
         proportion_removed = analytics.get('proportion_removed', None)
         proportion_removed_below_noise = analytics.get('proportion_removed_below_noise', None)
         ax8.set_title(f'Removed of full spectrum: {proportion_removed * 100:.2f}%\nRemoved below noise: {proportion_removed_below_noise * 100:.2f}%')
