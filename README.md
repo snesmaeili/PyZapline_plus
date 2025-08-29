@@ -77,8 +77,13 @@ from pyzaplineplus import zapline_plus
 data = np.random.randn(10000, 64)  # 10s of 64-channel data at 1000 Hz
 sampling_rate = 1000
 
-# Clean the data - it's that simple!
+# Clean the data
 cleaned_data, config, analytics, plots = zapline_plus(data, sampling_rate)
+
+# Optional: inspect analytics keys
+print('Analytics keys:', list(analytics.keys()))
+
+# Figures (if plotResults=True) are saved under ./figures/
 ```
 
 ### Advanced Usage
@@ -210,7 +215,12 @@ PyZaplinePlus is released under the MIT License. See `LICENSE` for more details.
 The PyZaplinePlus algorithm is inspired by the MATLAB-based Zapline-plus implementation, initially designed for removing line noise from EEG signals. Special thanks to the original authors and contributors who laid the foundation for this adaptive noise removal approach.
 
 ## Detailed User Guide
-For a detailed guide on how to use PyZaplinePlus, including configuration options and how to interpret the cleaning plots, please refer to our GitHub wiki.
+For a detailed guide on how to use PyZaplinePlus, including configuration options and how to interpret the cleaning plots, see the documentation site:
+
+- Installation: docs/user-guide/installation.md
+- Quick Start: docs/user-guide/quickstart.md
+- Examples: docs/user-guide/examples.md
+- API reference: docs/api/core.md
 
 ## Please Cite
 If you find PyZaplinePlus useful in your research, please cite the original papers:

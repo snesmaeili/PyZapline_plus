@@ -8,6 +8,23 @@ repo_name: SinaEsmaeili/PyZaplinePlus
 
 nav:
   - Home: index.md
+  - User Guide:
+    - Installation: user-guide/installation.md
+    - Quick Start: user-guide/quickstart.md
+    - Examples: user-guide/examples.md
+    - MNE Integration: user-guide/mne-integration.md
+  - API Reference:
+    - Core: api/core.md
+    - Noise Detection: api/noise-detection.md
+    - Utilities: api/utilities.md
+  - Developer Guide:
+    - Contributing: developer-guide/contributing.md
+    - Development Setup: developer-guide/development.md
+    - Release Process: developer-guide/release.md
+  - About:
+    - Changelog: about/changelog.md
+    - License: about/license.md
+    - Citation: about/citation.md
 
 theme:
   name: material
