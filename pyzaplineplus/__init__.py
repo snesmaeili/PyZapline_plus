@@ -43,3 +43,10 @@ __all__ = [
 __author__ = "Sina Esmaeili"
 __email__ = "sina.esmaeili@umontreal.ca"
 __license__ = "MIT"
+
+# Optional MNE adapter export (friendly if mne is absent)
+try:
+    from ._mne import apply_zapline_to_raw  # type: ignore[attr-defined]
+    __all__.append("apply_zapline_to_raw")
+except Exception:  # pragma: no cover - optional import must never break package
+    pass

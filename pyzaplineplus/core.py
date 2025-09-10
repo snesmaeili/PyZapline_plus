@@ -1,8 +1,43 @@
 import numpy as np
 from matplotlib import pyplot as plt
 from scipy import signal
+import warnings
 from typing import List, Optional, Tuple, Union, cast
 from .noise_detection import find_next_noisefreq
+
+
+def _welch_hamming_periodic(x, fs, nperseg, axis=0):
+    """
+    Welch PSD with periodic Hamming window and 50% overlap, matching MATLAB parity.
+
+    Parameters
+    ----------
+    x : array
+        Input data.
+    fs : float
+        Sampling frequency.
+    nperseg : int
+        Segment length for Welch.
+    axis : int
+        Axis over which the PSD is computed.
+
+    Returns
+    -------
+    f, pxx : ndarray
+        Frequency bins and power spectral density.
+    """
+    # periodic Hamming: sym=False
+    win = signal.windows.hamming(nperseg, sym=False)
+    f, pxx = signal.welch(
+        x,
+        fs=fs,
+        window=win,
+        noverlap=nperseg // 2,
+        nperseg=nperseg,
+        axis=axis,
+        detrend=False,
+    )
+    return f, pxx
 class PyZaplinePlus:
     def __init__(self, data, sampling_rate, **kwargs):
         # Validate inputs
@@ -25,6 +60,7 @@ class PyZaplinePlus:
             
         self.data = data
         self.sampling_rate = sampling_rate
+        self._warned_nyquist = False
         self.config = {
             'noisefreqs': kwargs.get('noisefreqs', []),
             'minfreq': kwargs.get('minfreq', 17),
@@ -124,8 +160,6 @@ class PyZaplinePlus:
         Uses a Hamming window with 50% overlap to match MATLAB pwelch defaults
         (periodic window form). This ensures parity with zapline-plus numerics.
         """
-        from scipy.signal import windows
-
         # Set window length and overlap to match MATLAB code
         nperseg = int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate)
 
@@ -138,18 +172,8 @@ class PyZaplinePlus:
         if nperseg < 8:
             nperseg = min(8, max_nperseg)
 
-        noverlap = int(0.5 * nperseg)  # 50% overlap to match MATLAB's default behavior
-
-        # Use periodic Hamming window to mirror MATLAB's pwelch default
-        win = windows.hamming(nperseg, sym=False)
-
-        f, pxx = signal.welch(
-            data,
-            fs=self.sampling_rate,
-            window=win,
-            nperseg=nperseg,
-            noverlap=noverlap,
-            axis=0,
+        f, pxx = _welch_hamming_periodic(
+            data, fs=self.sampling_rate, nperseg=nperseg, axis=0
         )
 
         # Log transform
@@ -322,7 +346,11 @@ class PyZaplinePlus:
         """
         Detect noise frequency in a given chunk.
         """
-        f, pxx_chunk = signal.welch(chunk, fs=self.sampling_rate, nperseg=len(chunk), axis=0)
+        # Use Hamming periodic + 50% overlap to match MATLAB parity
+        nperseg = len(chunk)
+        f, pxx_chunk = _welch_hamming_periodic(
+            chunk, fs=self.sampling_rate, nperseg=nperseg, axis=0
+        )
         pxx_log = 10 * np.log10(pxx_chunk)
 
         freq_idx = (f > noise_freq - self.config['detectionWinsize'] / 2) & (f < noise_freq + self.config['detectionWinsize'] / 2)
@@ -374,6 +402,15 @@ class PyZaplinePlus:
         for key, value in config_defaults.items():
             if key not in self.config or self.config[key] is None:
                 self.config[key] = value
+
+        # Guard: chunk length must allow at least 2 PSD windows for robust DSS/PSD
+        nperseg_psd = int(self.config.get('winSizeCompleteSpectrum', 300) * self.sampling_rate)
+        if nperseg_psd <= 0:
+            nperseg_psd = min(len(chunk), 8)
+        if len(chunk) < 2 * nperseg_psd:
+            warnings.warn("chunk too short for reliable PSD/DSS; skipping", RuntimeWarning)
+            # Return original chunk, no removal, empty scores
+            return chunk, 0, np.array([])
 
         # Step 1: Define line frequency normalized to sampling rate
         fline = noise_freq / self.sampling_rate
@@ -571,8 +608,18 @@ class PyZaplinePlus:
         """
         nyq = 0.5 * fs
         # Normalize with guards against invalid edges and Nyquist issues
-        low = max(1e-9, min(lowcut / nyq, 0.999999))
-        high = max(1e-9, min(highcut / nyq, 0.999999))
+        low_raw = lowcut / nyq
+        high_raw = highcut / nyq
+        low = max(1e-9, min(low_raw, 0.999999))
+        high = max(1e-9, min(high_raw, 0.999999))
+        # If requested band exceeded Nyquist, clip and warn once
+        if (low_raw != low) or (high_raw != high):
+            if not self._warned_nyquist:
+                warnings.warn(
+                    "Requested band exceeded [0, fs/2]; clipping to valid range.",
+                    RuntimeWarning,
+                )
+                self._warned_nyquist = True
         # If invalid band, return data unchanged (no-op)
         if high <= low:
             return data
@@ -586,19 +633,10 @@ class PyZaplinePlus:
         """
         Adjust the cleaning process if it was too weak or too strong.
         """
-        from scipy.signal import windows
-
-        # Compute the PSD of the clean data
+        # Compute the PSD of the clean data using periodic Hamming + 50% overlap
         nperseg = int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate)
-        noverlap = int(0.5 * nperseg)  # 50% overlap
-
-        f, pxx_clean = signal.welch(
-            clean_data,
-            fs=self.sampling_rate,
-            window=windows.hann(nperseg, sym=True),
-            nperseg=nperseg,
-            noverlap=noverlap,
-            axis=0
+        f, pxx_clean = _welch_hamming_periodic(
+            clean_data, fs=self.sampling_rate, nperseg=nperseg, axis=0
         )
         pxx_clean_log = 10 * np.log10(pxx_clean)
 
@@ -2105,7 +2143,7 @@ class PyZaplinePlus:
         """
         Compute and optionally plot the power spectrum of the data.
         """
-        f, pxx = signal.welch(data, fs=fs, nperseg=nfft, axis=0)
+        f, pxx = _welch_hamming_periodic(data, fs=fs, nperseg=nfft, axis=0)
         if return_data:
             return pxx, f
         else:

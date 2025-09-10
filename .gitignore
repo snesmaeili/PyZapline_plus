@@ -24,7 +24,8 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
-
+.ruff_cache/
+zapline-plus/
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
@@ -166,3 +167,7 @@ pyZapline_plus/data/channel_locations.elc
 
 
 tools/
+comparisons/
+repo.xml
+AGENTS.md
+CHANGELOG.md
