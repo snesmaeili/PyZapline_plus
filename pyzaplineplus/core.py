@@ -118,32 +118,43 @@ class PyZaplinePlus:
     def compute_spectrum(self, data):
         """
         Compute the power spectral density of the input data.
+
+        Notes
+        -----
+        Uses a Hamming window with 50% overlap to match MATLAB pwelch defaults
+        (periodic window form). This ensures parity with zapline-plus numerics.
         """
         from scipy.signal import windows
 
         # Set window length and overlap to match MATLAB code
         nperseg = int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate)
-        
+
         # Ensure nperseg doesn't exceed data length
         max_nperseg = data.shape[0]
         if nperseg > max_nperseg:
             nperseg = max_nperseg
-            
+
         # Ensure minimum nperseg for meaningful spectrum
         if nperseg < 8:
             nperseg = min(8, max_nperseg)
-            
+
         noverlap = int(0.5 * nperseg)  # 50% overlap to match MATLAB's default behavior
 
-        f, pxx = signal.welch(data,
-                            fs=self.sampling_rate,
-                            window=windows.hann(nperseg,sym=True),
-                            nperseg=nperseg,
-                            noverlap=noverlap, axis=0)
+        # Use periodic Hamming window to mirror MATLAB's pwelch default
+        win = windows.hamming(nperseg, sym=False)
+
+        f, pxx = signal.welch(
+            data,
+            fs=self.sampling_rate,
+            window=win,
+            nperseg=nperseg,
+            noverlap=noverlap,
+            axis=0,
+        )
 
         # Log transform
         pxx_log = 10 * np.log10(pxx)
-        
+
         return pxx_log, f
         
     def detect_line_noise(self):
@@ -162,6 +173,11 @@ class PyZaplinePlus:
         if not np.any(idx):
             # As a fallback, try the original narrow bounds
             idx = ((self.f > 49) & (self.f < 50)) | ((self.f > 59) & (self.f < 60))
+        if not np.any(idx):
+            # Still nothing: warn and skip narrowing; allow automatic detection later
+            print("Warning: No bins found around 50/60 Hz for 'line' detection; falling back to automatic detection.")
+            self.config['noisefreqs'] = []
+            return None
         spectra_chunk = self.pxx_raw_log[idx, :]
         # Flatten across channels and pick global maximum within the search band
         flat_idx = np.argmax(spectra_chunk)
@@ -308,18 +324,32 @@ class PyZaplinePlus:
         """
         f, pxx_chunk = signal.welch(chunk, fs=self.sampling_rate, nperseg=len(chunk), axis=0)
         pxx_log = 10 * np.log10(pxx_chunk)
-        
+
         freq_idx = (f > noise_freq - self.config['detectionWinsize'] / 2) & (f < noise_freq + self.config['detectionWinsize'] / 2)
         detailed_freq_idx = (f > noise_freq + self.config['detailedFreqBoundsUpper'][0]) & \
                             (f < noise_freq + self.config['detailedFreqBoundsUpper'][1])
         detailed_freqs = f[detailed_freq_idx]
-        
+
+        # Guard small-bin and empty-slice cases to avoid crashes on short chunks
+        n_bins_fine = int(np.sum(freq_idx))
+        if n_bins_fine < 3:
+            # Not enough resolution to apply fine thresholding; return as-is
+            return noise_freq
+
         fine_data = np.mean(pxx_log[freq_idx, :], axis=1)
-        third = len(fine_data) // 3
-        center_data = np.mean([fine_data[:third], fine_data[-third:]])
-        lower_quantile = np.mean([np.quantile(fine_data[:third], 0.05), np.quantile(fine_data[-third:], 0.05)])
+        third = max(1, len(fine_data) // 3)
+        # Avoid quantiles on empty slices
+        center_data = float(np.mean([fine_data[:third], fine_data[-third:]]))
+        lower_quantile = float(np.mean([
+            np.quantile(fine_data[:third], 0.05),
+            np.quantile(fine_data[-third:], 0.05),
+        ]))
         detailed_thresh = center_data + self.config['freqDetectMultFine'] * (center_data - lower_quantile)
-        
+
+        # If detailed freq slice is empty, keep the original frequency
+        if detailed_freqs.size < 1:
+            return noise_freq
+
         max_fine_power: float = float(np.max(np.mean(pxx_log[detailed_freq_idx, :], axis=1)))
         if max_fine_power > detailed_thresh:
             return detailed_freqs[np.argmax(np.mean(pxx_log[detailed_freq_idx, :], axis=1))]
@@ -539,9 +569,13 @@ class PyZaplinePlus:
         """
         Apply a bandpass filter to the data.
         """
-        nyquist = 0.5 * fs
-        low = lowcut / nyquist
-        high = highcut / nyquist
+        nyq = 0.5 * fs
+        # Normalize with guards against invalid edges and Nyquist issues
+        low = max(1e-9, min(lowcut / nyq, 0.999999))
+        high = max(1e-9, min(highcut / nyq, 0.999999))
+        # If invalid band, return data unchanged (no-op)
+        if high <= low:
+            return data
         b, a = signal.butter(order, [low, high], btype='band')
         return signal.filtfilt(b, a, data, axis=0)
 
@@ -1554,9 +1588,9 @@ class PyZaplinePlus:
         N2 = np.diag(todss.T @ c0 @ todss)
         todss = todss @ np.diag(1.0 / np.sqrt(N2))  # Adjust so that components are normalized
 
-        # Power per DSS component
-        pwr0 = np.sqrt(np.sum((c0 @ todss) ** 2, axis=0))  # Unbiased
-        pwr1 = np.sqrt(np.sum((c1 @ todss) ** 2, axis=0))  # Biased
+        # Power per DSS component (use quadratic form to match MATLAB definition)
+        pwr0 = np.sqrt(np.diag(todss.T @ c0 @ todss))  # Unbiased
+        pwr1 = np.sqrt(np.diag(todss.T @ c1 @ todss))  # Biased
 
         return todss, pwr0, pwr1
     def nt_tsr(self, x, ref, shifts=None, wx=None, wref=None, keep=None, thresh=1e-20):
@@ -1853,12 +1887,16 @@ class PyZaplinePlus:
             x_demeaned (np.ndarray): Demeaned data array.
             mn (np.ndarray): Mean values that were removed.
         """
+        added_trial_dim = False
         if x.ndim == 2:
-            n_dim=2
-            x=x[:,:,np.newaxis]
-            w=w[:,:,np.newaxis]
+            x = x[:, :, np.newaxis]
+            added_trial_dim = True
+            # Only expand w if provided
+            if w is not None and w.ndim == 2:
+                w = w[:, :, np.newaxis]
+
+        # Interpret index-form weights if provided and smaller than time dimension
         if w is not None and w.size < x.shape[0]:
-            # Interpret w as array of indices to set to 1
             w_indices = w.flatten()
             if np.min(w_indices) < 0 or np.max(w_indices) >= x.shape[0]:
                 raise ValueError('w interpreted as indices but values are out of range')
@@ -1866,7 +1904,8 @@ class PyZaplinePlus:
             w_full[w_indices, :, :] = 1
             w = w_full
 
-        if w is not None and w.shape[2] != x.shape[2]:
+        # Broadcast weights across trials if needed
+        if w is not None and w.ndim == 3 and w.shape[2] != x.shape[2]:
             if w.shape[2] == 1 and x.shape[2] != 1:
                 w = np.tile(w, (1, 1, x.shape[2]))
             else:
@@ -1877,10 +1916,23 @@ class PyZaplinePlus:
 
         if w is None:
             # Unweighted mean
-            mn = np.mean(x_unfolded, axis=0)
+            mn = np.mean(x_unfolded, axis=0, keepdims=True)
             x_demeaned = x_unfolded - mn
         else:
-            w_unfolded = w.reshape(m, -1)
+            # Ensure weights have shape (time, channels*trials)
+            if w.ndim == 3:
+                w_unfolded = w.reshape(m, -1)
+            elif w.ndim == 2:
+                # If provided as (time, 1), tile across channels*trials
+                if w.shape[1] == 1:
+                    w_unfolded = np.tile(w, (1, x_unfolded.shape[1]))
+                else:
+                    if w.shape[1] != x_unfolded.shape[1]:
+                        raise ValueError('Weight matrix should match unfolded data width')
+                    w_unfolded = w
+            else:
+                raise ValueError('Weight matrix has invalid dimensions')
+
             if w_unfolded.shape[0] != x_unfolded.shape[0]:
                 raise ValueError('x and w should have the same number of time samples')
 
@@ -1890,7 +1942,7 @@ class PyZaplinePlus:
 
         x_demeaned = x_demeaned.reshape(m, n, o)
         mn = mn.reshape(1, n, o)
-        if n_dim == 2:
+        if added_trial_dim:
             x_demeaned = x_demeaned.squeeze(-1)  # Remove the last dimension if singleton
             mn = mn.squeeze(-1)
         return x_demeaned, mn
@@ -1982,7 +2034,8 @@ class PyZaplinePlus:
 
         # Discard negligible regressor PCs
         if keep is not None:
-            keep = max(keep, topcs.shape[1])
+            # Keep at most `keep` components, not more
+            keep = min(keep, topcs.shape[1])
             topcs = topcs[:, :keep]
             eigenvalues = eigenvalues[:keep]
 
