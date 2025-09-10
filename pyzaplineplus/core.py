@@ -8,7 +8,8 @@ from .noise_detection import find_next_noisefreq
 
 def _welch_hamming_periodic(x, fs, nperseg, axis=0):
     """
-    Welch PSD with periodic Hann window and 50% overlap, matching MATLAB zapline-plus usage.
+    Welch PSD with Hamming window (periodic form) and 50% overlap,
+    matching MATLAB pwelch default used by zapline-plus.
 
     Parameters
     ----------
@@ -26,8 +27,8 @@ def _welch_hamming_periodic(x, fs, nperseg, axis=0):
     f, pxx : ndarray
         Frequency bins and power spectral density.
     """
-    # periodic Hann: sym=False (matches MATLAB hanning window used in zapline-plus)
-    win = signal.windows.hann(nperseg, sym=False)
+    # periodic Hamming: sym=False
+    win = signal.windows.hamming(nperseg, sym=False)
     f, pxx = signal.welch(
         x,
         fs=fs,
@@ -92,6 +93,15 @@ class PyZaplinePlus:
             'figBase': kwargs.get('figBase', 100),
             'figPos': kwargs.get('figPos', None),
             'saveSpectra': kwargs.get('saveSpectra', False)
+            ,
+            # DSS parity/debug controls (dev)
+            # MATLAB parity defaults for DSS internals
+            'dss_positive_only': kwargs.get('dss_positive_only', True),
+            'dss_divide_by_sumw2': kwargs.get('dss_divide_by_sumw2', False),
+            'dss_strict_frames': kwargs.get('dss_strict_frames', True),
+            'snapDssToFftBin': kwargs.get('snapDssToFftBin', True),
+            'saveDssDebug': kwargs.get('saveDssDebug', False),
+            'debugOutDir': kwargs.get('debugOutDir', None),
         }
 
     def finalize_inputs(self):
@@ -157,8 +167,8 @@ class PyZaplinePlus:
 
         Notes
         -----
-        Uses a Hann window with 50% overlap to match MATLAB zapline-plus
-        pwelch usage (periodic form). This ensures parity with MATLAB outputs.
+        Uses a Hamming window with 50% overlap to match MATLAB pwelch
+        (periodic form). This ensures parity with MATLAB outputs.
         """
         # Set window length and overlap to match MATLAB code
         nperseg = int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate)
@@ -456,12 +466,39 @@ class PyZaplinePlus:
 
         # Step 5: DSS to isolate line components from residual
         n_harmonics = int(np.floor(0.5 / fline))
-        harmonics = fline * np.arange(1, n_harmonics + 1)
+        if self.config.get('snapDssToFftBin', True):
+            # Snap each harmonic to the nearest FFT bin index consistent with nt_bias_fft rounding
+            nfft = int(self.config.get('nfft', 1024))
+            harmonic_freqs = []
+            for k in range(1, n_harmonics + 1):
+                f_norm = fline * k
+                idx = int(round(f_norm * nfft + 0.5))
+                idx = max(0, min(idx, nfft // 2))
+                # Inverse mapping to normalized frequency that re-yields idx in nt_bias_fft
+                f_norm_snap = (idx - 0.5) / nfft if idx > 0 else 0.0
+                harmonic_freqs.append(f_norm_snap)
+            harmonics = np.array(harmonic_freqs, dtype=float)
+        else:
+            harmonics = fline * np.arange(1, n_harmonics + 1)
         c0, c1 = self.nt_bias_fft(
             truncated_chunk,
             freq=harmonics,
             nfft=self.config['nfft']
         )
+        # Optional: save DSS matrices/scores for parity debugging
+        if self.config.get('saveDssDebug', False):
+            try:
+                import os
+                out_dir = self.config.get('debugOutDir') or os.path.join(os.getcwd(), 'comparisons', 'debug')
+                os.makedirs(out_dir, exist_ok=True)
+                # Use noise freq and chunk length as part of the name
+                tag = f"f{noise_freq:.6f}_n{len(chunk)}"
+                np.savez(
+                    os.path.join(out_dir, f"dss_mats_{tag}.npz"),
+                    c0=c0, c1=c1,
+                )
+            except Exception:
+                pass
         todss, pwr0, pwr1 = self.nt_dss0(c0, c1)
         scores = pwr1 / pwr0
 
@@ -1546,7 +1583,15 @@ class PyZaplinePlus:
             raise ValueError("freq should have one or two rows")
 
         # Symmetrize the Filter
-        filt_full = np.concatenate([filt, np.flip(filt[1:-1])])
+        # Build full-spectrum filter. Optionally force positive-bin-only for dev parity experiments.
+        if self.config.get('dss_positive_only', False) and freq.ndim == 1 and freq.size > 0:
+            # Positive-bin-only mask: keep only exact positive bin indices, no mirrored negative bins
+            filt_full = np.zeros(nfft, dtype=float)
+            for k in range(freq.shape[0]):
+                idx = int(round(freq[k] * nfft + 0.5))
+                filt_full[idx] = 1.0
+        else:
+            filt_full = np.concatenate([filt, np.flip(filt[1:-1])])
 
         # Hann Window (symmetric to match MATLAB hanning(nfft))
         w = windows.hann(nfft, sym=True)
@@ -1577,19 +1622,32 @@ class PyZaplinePlus:
         # Initialize c1: Biased Covariance Matrix
         c1 = np.zeros_like(c0)
 
-        # Calculate Number of Frames
-        nframes = int(np.ceil((n_samples - nfft / 2) / (nfft / 2)))
+        # Calculate frame start indices (50% overlap). For MATLAB parity, restrict to
+        # full windows excluding the trailing partial pair so that frames = 2*floor(m/nfft)-3
+        # which matches observed behavior in zapline-plus' nt_bias_fft usage.
+        if self.config.get('dss_strict_frames', True):
+            windows_full = max(0, int(np.floor(n_samples / nfft) - 1))
+            max_start = int(max(0, windows_full * nfft))
+            starts = list(range(0, max_start + 1, nfft // 2))
+        else:
+            nframes = int(np.ceil((n_samples - nfft / 2) / (nfft / 2)))
+            starts = [int(min(k * (nfft // 2), n_samples - nfft)) for k in range(nframes)]
 
         for trial in range(n_trials):
-            for k in range(nframes):
-                idx = int(k * nfft // 2)
-                idx = min(idx, n_samples - nfft)
+            for idx in starts:
                 z = x[idx:idx + nfft, :, trial]  # (nfft, n_channels)
                 z = self.nt_vecmult(z,w)  # Apply Hann window
                 Z = fft(z, axis=0)
                 Z = self.nt_vecmult(Z, filt_full)  # Apply filter
                 cov_matrix = np.real(np.dot(Z.conj().T, Z))  # (n_channels, n_channels)
                 c1 += cov_matrix
+
+        # Optional window-energy normalization (dev parity control)
+        if self.config.get('dss_divide_by_sumw2', False):
+            from numpy import sum as npsum
+            denom = float(npsum(w**2))
+            if denom > 0:
+                c1 = c1 / denom
 
         return c0, c1
     def nt_dss0(self, c0, c1, keep1=None, keep2=10**-9):
@@ -1618,7 +1676,8 @@ class PyZaplinePlus:
 
         # PCA and whitening matrix from the unbiased covariance
         topcs1, evs1 = self.nt_pcarot(c0, keep1, keep2)
-        # Eigenvalues of covariance should be non-negative already
+        # Match MATLAB nt_dss0.m: take absolute eigenvalues before whitening
+        evs1 = np.abs(evs1)
 
         # Truncate PCA series if needed (thresholding already handled inside nt_pcarot)
         if keep1 is not None:
