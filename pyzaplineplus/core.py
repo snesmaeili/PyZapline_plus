@@ -95,8 +95,8 @@ class PyZaplinePlus:
             'saveSpectra': kwargs.get('saveSpectra', False)
             ,
             # DSS parity/debug controls (dev)
-            # MATLAB parity defaults for DSS internals
-            'dss_positive_only': kwargs.get('dss_positive_only', True),
+            # MATLAB parity defaults for DSS internals: use symmetric (+/-) bins
+            'dss_positive_only': kwargs.get('dss_positive_only', False),
             'dss_divide_by_sumw2': kwargs.get('dss_divide_by_sumw2', False),
             'dss_strict_frames': kwargs.get('dss_strict_frames', True),
             'snapDssToFftBin': kwargs.get('snapDssToFftBin', True),
@@ -467,12 +467,12 @@ class PyZaplinePlus:
         # Step 5: DSS to isolate line components from residual
         n_harmonics = int(np.floor(0.5 / fline))
         if self.config.get('snapDssToFftBin', True):
-            # Snap each harmonic to the nearest FFT bin index consistent with nt_bias_fft rounding
+            # Snap each harmonic to the nearest FFT bin index consistent with MATLAB round: floor(x+0.5)
             nfft = int(self.config.get('nfft', 1024))
             harmonic_freqs = []
             for k in range(1, n_harmonics + 1):
                 f_norm = fline * k
-                idx = int(round(f_norm * nfft + 0.5))
+                idx = int(np.floor(f_norm * nfft + 0.5))
                 idx = max(0, min(idx, nfft // 2))
                 # Inverse mapping to normalized frequency that re-yields idx in nt_bias_fft
                 f_norm_snap = (idx - 0.5) / nfft if idx > 0 else 0.0
@@ -1568,14 +1568,14 @@ class PyZaplinePlus:
 
         if freq.ndim == 1:
             for k in range(freq.shape[0]):
-                idx = int(round(freq[k] * nfft + 0.5))
+                idx = int(np.floor(freq[k] * nfft + 0.5))
                 if idx >= len(filt):
                     raise ValueError(f"Frequency index {idx} out of bounds for filter of length {len(filt)}.")
                 filt[idx] = 1
         elif freq.shape[0] == 2:
             for k in range(freq.shape[1]):
-                start_idx = int(round(freq[0, k] * nfft + 0.5))
-                end_idx = int(round(freq[1, k] * nfft + 0.5)) + 1
+                start_idx = int(np.floor(freq[0, k] * nfft + 0.5))
+                end_idx = int(np.floor(freq[1, k] * nfft + 0.5)) + 1
                 if start_idx >= len(filt) or end_idx > len(filt):
                     raise ValueError(f"Frequency slice [{start_idx}:{end_idx}] out of bounds for filter of length {len(filt)}.")
                 filt[start_idx:end_idx] = 1
@@ -1588,7 +1588,7 @@ class PyZaplinePlus:
             # Positive-bin-only mask: keep only exact positive bin indices, no mirrored negative bins
             filt_full = np.zeros(nfft, dtype=float)
             for k in range(freq.shape[0]):
-                idx = int(round(freq[k] * nfft + 0.5))
+                idx = int(np.floor(freq[k] * nfft + 0.5))
                 filt_full[idx] = 1.0
         else:
             filt_full = np.concatenate([filt, np.flip(filt[1:-1])])
