@@ -98,8 +98,8 @@ class PyZaplinePlus:
             # MATLAB parity defaults for DSS internals: use symmetric (+/-) bins
             'dss_positive_only': kwargs.get('dss_positive_only', False),
             'dss_divide_by_sumw2': kwargs.get('dss_divide_by_sumw2', False),
-            'dss_strict_frames': kwargs.get('dss_strict_frames', True),
-            'snapDssToFftBin': kwargs.get('snapDssToFftBin', True),
+            'dss_strict_frames': kwargs.get('dss_strict_frames', False),
+            'snapDssToFftBin': kwargs.get('snapDssToFftBin', False),
             'saveDssDebug': kwargs.get('saveDssDebug', False),
             'debugOutDir': kwargs.get('debugOutDir', None),
         }
@@ -352,21 +352,18 @@ class PyZaplinePlus:
         
         return chunk_indices
 
-    def detect_chunk_noise(self, chunk, noise_freq):
+    def detect_chunk_noise(self, chunk, noise_freq, return_details=False):
         """
         Detect noise frequency in a given chunk.
 
         Returns
         -------
-        chunk_noise_freq : float
-            The frequency to use for cleaning this chunk (either the detected
-            detailed peak or the provided global noise_freq if no clear peak is found).
-        found_flag : int
-            1 if a clear chunk-specific noise peak was found above the fine threshold,
-            otherwise 0.
-        peak_freq : float
-            The detailed-band peak frequency (reported as noisePeaks in MATLAB),
-            even if found_flag == 0.
+        float or tuple
+            If ``return_details`` is ``False`` (default) the function returns the
+            frequency that should be cleaned for the chunk. When
+            ``return_details`` is ``True`` a tuple ``(chunk_noise_freq,
+            found_flag, peak_freq)`` matching the MATLAB bookkeeping is
+            returned.
         """
         # Use Hann periodic + 50% overlap to match MATLAB parity
         nperseg = len(chunk)
@@ -384,7 +381,14 @@ class PyZaplinePlus:
         n_bins_fine = int(np.sum(freq_idx))
         if n_bins_fine < 3:
             # Not enough resolution: report no detection and keep global frequency
-            return noise_freq, 0, float(noise_freq)
+            chunk_noise_freq = float(noise_freq)
+            found_flag = 0
+            peak_freq = float(noise_freq)
+            return (
+                (chunk_noise_freq, found_flag, peak_freq)
+                if return_details
+                else chunk_noise_freq
+            )
 
         fine_data = np.mean(pxx_log[freq_idx, :], axis=1)
         third = max(1, len(fine_data) // 3)
@@ -398,7 +402,14 @@ class PyZaplinePlus:
 
         # If detailed freq slice is empty, keep the original frequency
         if detailed_freqs.size < 1:
-            return noise_freq, 0, float(noise_freq)
+            chunk_noise_freq = float(noise_freq)
+            found_flag = 0
+            peak_freq = float(noise_freq)
+            return (
+                (chunk_noise_freq, found_flag, peak_freq)
+                if return_details
+                else chunk_noise_freq
+            )
 
         # Compute detailed-band max and peak
         detailed_band_mean = np.mean(pxx_log[detailed_freq_idx, :], axis=1)
@@ -406,14 +417,45 @@ class PyZaplinePlus:
         peak_idx = int(np.argmax(detailed_band_mean))
         peak_freq = float(detailed_freqs[peak_idx])
         if max_fine_power > detailed_thresh:
-            return peak_freq, 1, peak_freq
+            chunk_noise_freq = peak_freq
+            found_flag = 1
+            return (
+                (chunk_noise_freq, found_flag, peak_freq)
+                if return_details
+                else chunk_noise_freq
+            )
         # No strong local peak found: clean with global noise_freq but report peak
-        return noise_freq, 0, peak_freq
+        chunk_noise_freq = float(noise_freq)
+        found_flag = 0
+        return (
+            (chunk_noise_freq, found_flag, peak_freq)
+            if return_details
+            else chunk_noise_freq
+        )
 
     def apply_zapline_to_chunk(self, chunk, noise_freq):
         """
         Apply noise removal to the chunk using DSS (Denoising Source Separation) based on the provided MATLAB code.
         """
+        chunk = np.asarray(chunk)
+        if chunk.ndim == 1:
+            chunk = chunk[:, np.newaxis]
+
+        # Guard very short chunks: MATLAB requires enough samples for
+        # Welch/DSS; fall back to identity cleaning with a warning.
+        win_sec = float(self.config.get('winSizeCompleteSpectrum', 0) or 0)
+        if win_sec <= 0:
+            win_sec = 1.0
+        guard_sec = min(max(win_sec, 0.5), 2.0)
+        min_chunk_samples = max(int(2 * guard_sec * self.sampling_rate), 2)
+
+        if chunk.shape[0] < min_chunk_samples:
+            warnings.warn(
+                "chunk too short for stable DSS cleaning; skipping component removal.",
+                RuntimeWarning,
+            )
+            return chunk.copy(), 0, np.empty(0, dtype=float)
+
         # Ensure self.config has all necessary default parameters
         config_defaults = {
             'nfft': 1024,
@@ -430,14 +472,9 @@ class PyZaplinePlus:
             if key not in self.config or self.config[key] is None:
                 self.config[key] = value
 
-        # Guard: ensure enough samples for at least two nfft-based frames in nt_bias_fft
-        # nt_bias_fft uses frames of length nfft with half-overlap; two frames need ~1.5*nfft
-        nfft = int(self.config.get('nfft', 1024))
-        min_len = int(1.5 * max(1, nfft))
-        if len(chunk) < min_len:
-            warnings.warn("chunk too short for reliable PSD/DSS; skipping", RuntimeWarning)
-            # Return original chunk, no removal, empty scores
-            return chunk, 0, np.array([])
+        # Effective nfft: match MATLAB behavior by reducing nfft if chunk is short
+        nfft_cfg = int(self.config.get('nfft', 1024))
+        nfft = min(nfft_cfg, int(len(chunk)))
 
         # Step 1: Define line frequency normalized to sampling rate
         fline = noise_freq / self.sampling_rate
@@ -457,18 +494,21 @@ class PyZaplinePlus:
         residual_chunk = chunk - smoothed_chunk
 
         # Step 4: PCA to reduce dimensionality and avoid overfitting
-        if self.config['nkeep'] is None:
-            self.config['nkeep'] = residual_chunk.shape[1]
+        nkeep_val = self.config.get('nkeep')
+        if nkeep_val in (None, 0) or (isinstance(nkeep_val, (int, float)) and nkeep_val <= 0):
+            nkeep_val = residual_chunk.shape[1]
+            self.config['nkeep'] = nkeep_val
+        else:
+            nkeep_val = int(nkeep_val)
         truncated_chunk, _ = self.nt_pca(
             residual_chunk,
-            nkeep=self.config['nkeep']
+            nkeep=nkeep_val
         )
 
         # Step 5: DSS to isolate line components from residual
         n_harmonics = int(np.floor(0.5 / fline))
-        if self.config.get('snapDssToFftBin', True):
+        if self.config.get('snapDssToFftBin', False):
             # Snap each harmonic to the nearest FFT bin index consistent with MATLAB round: floor(x+0.5)
-            nfft = int(self.config.get('nfft', 1024))
             harmonic_freqs = []
             for k in range(1, n_harmonics + 1):
                 f_norm = fline * k
@@ -483,7 +523,7 @@ class PyZaplinePlus:
         c0, c1 = self.nt_bias_fft(
             truncated_chunk,
             freq=harmonics,
-            nfft=self.config['nfft']
+            nfft=nfft
         )
         # Optional: save DSS matrices/scores for parity debugging
         if self.config.get('saveDssDebug', False):
@@ -2593,7 +2633,11 @@ class PyZaplinePlus:
                     
                     # Determine per-chunk noise peak and whether it's a clear detection
                     if self.config['searchIndividualNoise']:
-                        chunk_noise_freq, found_flag, peak_freq = self.detect_chunk_noise(chunk, noise_freq)
+                        chunk_noise_freq, found_flag, peak_freq = self.detect_chunk_noise(
+                            chunk,
+                            noise_freq,
+                            return_details=True,
+                        )
                     else:
                         chunk_noise_freq, found_flag, peak_freq = noise_freq, 1, noise_freq
 
