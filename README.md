@@ -27,6 +27,10 @@ The main objectives of PyZaplinePlus include:
 - **Advanced Spectrum Analysis:** Refined detection mechanisms for identifying noisy components in both the coarse and fine frequency domains.
 - **Visualization Support:** Built-in functionality for plotting power spectra before and after denoising to allow easy evaluation of noise removal results.
 
+## MATLAB parity
+
+PyZaplinePlus matches MATLAB zapline-plus numerics. The power spectral density helper wraps `scipy.signal.welch` with a periodic Hamming window and 50% overlap to emulate MATLAB `pwelch`; see `docs/parity.md#welch-psd-parity` for the rationale, guardrails, and regression evidence.
+
 ## 🚀 Installation
 
 ### From PyPI (Recommended)

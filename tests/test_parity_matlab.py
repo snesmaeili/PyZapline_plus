@@ -12,33 +12,29 @@ from scipy.signal import windows
 from pyzaplineplus import PyZaplinePlus
 
 
-def test_psd_parity_hamming_peak_bin():
-    # Synthetic: 50 Hz line + noise
-    fs = 500
+@pytest.mark.parametrize("fs", [125, 250, 500])
+def test_psd_parity_hamming_peak_bin(fs):
     duration = 20.0
+    rng = np.random.default_rng(0)
     t = np.arange(0, duration, 1 / fs)
-    x = 0.2 * np.random.randn(t.size, 4)
+    x = 0.2 * rng.standard_normal((t.size, 4))
     x += 1.5 * np.sin(2 * np.pi * 50 * t)[:, None]
 
-    # Window ~1s for resolution; enforce Hamming + 50% overlap
     win_sec = 1.0
     nperseg = int(win_sec * fs)
     zp = PyZaplinePlus(x, fs, plotResults=False, winSizeCompleteSpectrum=win_sec)
     pxx_log, f = zp.compute_spectrum(x)
 
-    # Reference PSD using periodic Hamming and 50% overlap
     ref_win = windows.hamming(nperseg, sym=False)
     f_ref, pxx_ref = signal.welch(
         x, fs=fs, window=ref_win, nperseg=nperseg, noverlap=nperseg // 2, axis=0
     )
 
-    # Compare peak bin near 50 Hz on mean PSD across channels
     mean_pxx = np.mean(10 * np.log10(pxx_ref), axis=1)
     mean_pxx_zp = np.mean(pxx_log, axis=1)
     band = (f_ref >= 40) & (f_ref <= 60)
     idx_ref = np.argmax(mean_pxx[band])
     idx_zp = np.argmax(mean_pxx_zp[band])
-    # Ensure both peak at the same frequency bin
     assert np.allclose(f_ref[band][idx_ref], f[band][idx_zp])
 
 
@@ -98,3 +94,98 @@ def test_nt_dss0_pwr_shapes_and_finiteness():
     scores = pwr1 / (pwr0 + 1e-30)
     assert np.isfinite(scores).all()
 
+
+
+def test_iterative_outlier_removal_counts_outliers():
+    rng = np.random.default_rng(0)
+    zap = PyZaplinePlus(rng.standard_normal((200, 2)), 250, plotResults=False)
+    scores = np.concatenate([np.ones(20), np.array([5.0, 6.0])])
+    n_remove, threshold = zap.iterative_outlier_removal(scores.copy(), sd_level=1.0)
+    assert n_remove == 2
+    assert threshold == pytest.approx(1.0)
+
+def test_adaptive_chunk_detection_detects_covariance_shift():
+    fs = 100
+    segment_len = 0.5
+    line = 10.0
+    seg_samples = int(segment_len * fs)
+    t = np.arange(seg_samples) / fs
+    sine = np.sin(2 * np.pi * line * t)
+    segment_a = np.column_stack([sine, 0.1 * sine])
+    segment_b = np.column_stack([sine, 0.1 * sine])
+    segment_c = np.column_stack([0.05 * sine, 2.0 * sine])
+    segment_d = np.column_stack([0.05 * sine, 2.0 * sine])
+    data = np.vstack([segment_a, segment_b, segment_c, segment_d])
+    data += 1e-3 * np.random.default_rng(1).standard_normal(data.shape)
+
+    zap = PyZaplinePlus(
+        data,
+        fs,
+        plotResults=False,
+        segmentLength=segment_len,
+        minChunkLength=segment_len,
+        chunkLength=0,
+        prominenceQuantile=0.5,
+    )
+    chunks = zap.adaptive_chunk_detection(line)
+    assert chunks == [0, seg_samples * 2, data.shape[0]]
+
+def test_detect_noise_frequencies_identifies_dual_line_peaks():
+    fs = 500
+    duration = 30.0
+    rng = np.random.default_rng(1)
+    t = np.arange(0, duration, 1 / fs)
+    x = 0.1 * rng.standard_normal((t.size, 2))
+    x += 1.2 * np.sin(2 * np.pi * 50 * t)[:, None]
+    x += 0.8 * np.sin(2 * np.pi * 60 * t)[:, None]
+
+    zap = PyZaplinePlus(
+        x,
+        fs,
+        plotResults=False,
+        minfreq=40,
+        maxfreq=70,
+    )
+    zap.finalize_inputs()
+    detected = np.array(zap.config['noisefreqs'], dtype=float)
+
+    assert detected.size >= 2
+    freq_resolution = zap.f[1] - zap.f[0] if zap.f.size > 1 else 0.0
+
+    def _contains(target: float) -> bool:
+        if freq_resolution == 0.0:
+            return np.any(np.isclose(detected, target))
+        return np.any(np.abs(detected - target) <= freq_resolution)
+
+    assert _contains(50.0)
+    assert _contains(60.0)
+
+
+
+def test_adaptive_cleaning_handles_two_bin_window():
+    fs = 250
+    duration = 0.2
+    rng = np.random.default_rng(2)
+    t = np.arange(0, duration, 1 / fs)
+    data = 0.05 * rng.standard_normal((t.size, 2))
+    data += np.sin(2 * np.pi * 50 * t)[:, None]
+
+    zap = PyZaplinePlus(data, fs, plotResults=False)
+    zap.finalize_inputs()
+    zapline_config = zap.config.copy()
+    clean_data = zap.data.copy()
+
+    cleaning_done, updated_config, cleaning_flag = zap.adaptive_cleaning(
+        clean_data,
+        zap.data,
+        50.0,
+        zapline_config,
+        cleaning_too_strong_once=False,
+    )
+
+    assert isinstance(cleaning_done, bool)
+    assert cleaning_flag in (True, False)
+    assert np.isfinite(updated_config['remaining_noise_thresh_upper'])
+    assert np.isfinite(updated_config['remaining_noise_thresh_lower'])
+    assert 'thisFreqidxUppercheck' in updated_config
+    assert updated_config['thisFreqidxUppercheck'].dtype == bool

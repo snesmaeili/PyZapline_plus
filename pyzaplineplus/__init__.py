@@ -46,7 +46,7 @@ __license__ = "MIT"
 
 # Optional MNE adapter export (friendly if mne is absent)
 try:
-    from ._mne import apply_zapline_to_raw  # type: ignore[attr-defined]
-    __all__.append("apply_zapline_to_raw")
+    from .integration.mne import apply_zapline_to_raw, zapline_plus_epochs, zapline_plus_raw
+    __all__.extend(["apply_zapline_to_raw", "zapline_plus_raw", "zapline_plus_epochs"])
 except Exception:  # pragma: no cover - optional import must never break package
     pass

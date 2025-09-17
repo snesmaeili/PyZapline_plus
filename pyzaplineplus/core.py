@@ -365,7 +365,7 @@ class PyZaplinePlus:
             found_flag, peak_freq)`` matching the MATLAB bookkeeping is
             returned.
         """
-        # Use Hann periodic + 50% overlap to match MATLAB parity
+        # Use Hamming periodic + 50% overlap to match MATLAB parity
         nperseg = len(chunk)
         f, pxx_chunk = _welch_hamming_periodic(
             chunk, fs=self.sampling_rate, nperseg=nperseg, axis=0
@@ -728,30 +728,36 @@ class PyZaplinePlus:
         Adjust the cleaning process if it was too weak or too strong.
         """
         # Compute the PSD of the clean data using periodic Hamming + 50% overlap
-        nperseg = int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate)
-        f, pxx_clean = _welch_hamming_periodic(
-            clean_data, fs=self.sampling_rate, nperseg=nperseg, axis=0
-        )
-        pxx_clean_log = 10 * np.log10(pxx_clean)
+        pxx_clean_log, f = self.compute_spectrum(clean_data)
 
         # Determine center power by checking lower and upper third around noise frequency
         detectionWinsize = zapline_config['detectionWinsize']
         freq_range = (f > noise_freq - (detectionWinsize / 2)) & (f < noise_freq + (detectionWinsize / 2))
         this_fine_data = np.mean(pxx_clean_log[freq_range, :], axis=1)
 
-        # Calculate thirds of the data
-        third = int(np.round(len(this_fine_data) / 3))
-        if third == 0:
-            third = 1  # Ensure at least one sample
+        if this_fine_data.size == 0:
+            zapline_config['remaining_noise_thresh_upper'] = np.nan
+            zapline_config['remaining_noise_thresh_lower'] = np.nan
+            zapline_config['thisFreqidxUppercheck'] = np.zeros_like(f, dtype=bool)
+            zapline_config['thisFreqidxLowercheck'] = np.zeros_like(f, dtype=bool)
+            zapline_config['proportion_above_upper'] = 0.0
+            zapline_config['proportion_below_lower'] = 0.0
+            return True, zapline_config, cleaning_too_strong_once
 
-        indices = np.concatenate((np.arange(0, third), np.arange(2 * third, len(this_fine_data))))
-        center_this_data = np.mean(this_fine_data[indices])
+        n_bins = this_fine_data.size
+        third = max(int(np.round(n_bins / 3.0)), 1)
 
-        # Measure of variation using lower quantile
-        mean_lower_quantile = np.mean([
-            np.quantile(this_fine_data[0:third], 0.05),
-            np.quantile(this_fine_data[2 * third:], 0.05)
-        ])
+        lower_slice = this_fine_data[:third]
+        upper_slice = this_fine_data[-third:] if third <= n_bins else this_fine_data
+        side_concat = np.concatenate((lower_slice, upper_slice))
+        center_this_data = float(np.mean(side_concat)) if side_concat.size else float(np.mean(this_fine_data))
+
+        def _safe_quantile(arr: np.ndarray) -> float:
+            if arr.size == 0:
+                return float(np.quantile(this_fine_data, 0.05))
+            return float(np.quantile(arr, 0.05))
+
+        mean_lower_quantile = 0.5 * (_safe_quantile(lower_slice) + _safe_quantile(upper_slice))
 
         # Compute thresholds
         freq_detect_mult_fine = zapline_config['freqDetectMultFine']

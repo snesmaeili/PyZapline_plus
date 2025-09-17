@@ -18,7 +18,6 @@ import numpy as np
 import mne
 from mne.datasets import eegbci
 from mne.io import read_raw_edf
-from scipy import signal
 
 # Ensure repository root is on sys.path for local imports
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
@@ -26,6 +25,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from pyzaplineplus import zapline_plus
+from pyzaplineplus.core import _welch_hamming_periodic
 
 
 def main():
@@ -65,8 +65,9 @@ def main():
     # Evaluate reduction at first detected frequency if any
     if len(detected) > 0:
         target = float(detected[0])
-        f, pxx_o = signal.welch(data.T, fs=fs, axis=0)
-        f2, pxx_c = signal.welch(clean_data.T, fs=fs, axis=0)
+        nperseg = min(int(fs), data.shape[1])
+        f, pxx_o = _welch_hamming_periodic(data.T, fs, nperseg, axis=0)
+        _, pxx_c = _welch_hamming_periodic(clean_data.T, fs, nperseg, axis=0)
         fi = np.argmin(np.abs(f - target))
         before = float(np.mean(pxx_o[fi, :]))
         after = float(np.mean(pxx_c[fi, :]))
@@ -86,8 +87,9 @@ def main():
             plotResults=True,
             chunkLength=0
         )
-        f, pxx_o = signal.welch(noisy.T, fs=fs, axis=0)
-        f2, pxx_c = signal.welch(clean_demo.T, fs=fs, axis=0)
+        nperseg = min(int(fs), noisy.shape[1])
+        f, pxx_o = _welch_hamming_periodic(noisy.T, fs, nperseg, axis=0)
+        _, pxx_c = _welch_hamming_periodic(clean_demo.T, fs, nperseg, axis=0)
         fi = np.argmin(np.abs(f - 50.0))
         before = float(np.mean(pxx_o[fi, :]))
         after = float(np.mean(pxx_c[fi, :]))
