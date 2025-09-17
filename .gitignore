@@ -167,7 +167,11 @@ pyZapline_plus/data/channel_locations.elc
 
 
 tools/
-comparisons/
+comparisons/*
+!comparisons/real_dataset/
+!comparisons/real_dataset/**
+comparisons/real_dataset/data/
+comparisons/real_dataset/results/
 repo.xml
 AGENTS.md
 CHANGELOG.md
