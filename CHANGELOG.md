@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Memory efficiency improvements
 - Edge cases in noise detection
 - Compatibility with latest NumPy and SciPy versions
+- Parity with MATLAB: Hamming PSD (periodic, 50% overlap), small-chunk guards in detection, nt_regcov keep logic, nt_dss0 power computation, and Nyquist guards in bandpass
 
 ## [1.0.0] - 2024-01-XX
 

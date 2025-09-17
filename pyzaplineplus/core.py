@@ -1,8 +1,44 @@
 import numpy as np
 from matplotlib import pyplot as plt
 from scipy import signal
+import warnings
 from typing import List, Optional, Tuple, Union, cast
 from .noise_detection import find_next_noisefreq
+
+
+def _welch_hamming_periodic(x, fs, nperseg, axis=0):
+    """
+    Welch PSD with Hamming window (periodic form) and 50% overlap,
+    matching MATLAB pwelch default used by zapline-plus.
+
+    Parameters
+    ----------
+    x : array
+        Input data.
+    fs : float
+        Sampling frequency.
+    nperseg : int
+        Segment length for Welch.
+    axis : int
+        Axis over which the PSD is computed.
+
+    Returns
+    -------
+    f, pxx : ndarray
+        Frequency bins and power spectral density.
+    """
+    # periodic Hamming: sym=False
+    win = signal.windows.hamming(nperseg, sym=False)
+    f, pxx = signal.welch(
+        x,
+        fs=fs,
+        window=win,
+        noverlap=nperseg // 2,
+        nperseg=nperseg,
+        axis=axis,
+        detrend=False,
+    )
+    return f, pxx
 class PyZaplinePlus:
     def __init__(self, data, sampling_rate, **kwargs):
         # Validate inputs
@@ -25,6 +61,7 @@ class PyZaplinePlus:
             
         self.data = data
         self.sampling_rate = sampling_rate
+        self._warned_nyquist = False
         self.config = {
             'noisefreqs': kwargs.get('noisefreqs', []),
             'minfreq': kwargs.get('minfreq', 17),
@@ -56,6 +93,15 @@ class PyZaplinePlus:
             'figBase': kwargs.get('figBase', 100),
             'figPos': kwargs.get('figPos', None),
             'saveSpectra': kwargs.get('saveSpectra', False)
+            ,
+            # DSS parity/debug controls (dev)
+            # MATLAB parity defaults for DSS internals: use symmetric (+/-) bins
+            'dss_positive_only': kwargs.get('dss_positive_only', False),
+            'dss_divide_by_sumw2': kwargs.get('dss_divide_by_sumw2', False),
+            'dss_strict_frames': kwargs.get('dss_strict_frames', False),
+            'snapDssToFftBin': kwargs.get('snapDssToFftBin', False),
+            'saveDssDebug': kwargs.get('saveDssDebug', False),
+            'debugOutDir': kwargs.get('debugOutDir', None),
         }
 
     def finalize_inputs(self):
@@ -118,32 +164,31 @@ class PyZaplinePlus:
     def compute_spectrum(self, data):
         """
         Compute the power spectral density of the input data.
-        """
-        from scipy.signal import windows
 
+        Notes
+        -----
+        Uses a Hamming window with 50% overlap to match MATLAB pwelch
+        (periodic form). This ensures parity with MATLAB outputs.
+        """
         # Set window length and overlap to match MATLAB code
         nperseg = int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate)
-        
+
         # Ensure nperseg doesn't exceed data length
         max_nperseg = data.shape[0]
         if nperseg > max_nperseg:
             nperseg = max_nperseg
-            
+
         # Ensure minimum nperseg for meaningful spectrum
         if nperseg < 8:
             nperseg = min(8, max_nperseg)
-            
-        noverlap = int(0.5 * nperseg)  # 50% overlap to match MATLAB's default behavior
 
-        f, pxx = signal.welch(data,
-                            fs=self.sampling_rate,
-                            window=windows.hann(nperseg,sym=True),
-                            nperseg=nperseg,
-                            noverlap=noverlap, axis=0)
+        f, pxx = _welch_hamming_periodic(
+            data, fs=self.sampling_rate, nperseg=nperseg, axis=0
+        )
 
         # Log transform
         pxx_log = 10 * np.log10(pxx)
-        
+
         return pxx_log, f
         
     def detect_line_noise(self):
@@ -162,6 +207,11 @@ class PyZaplinePlus:
         if not np.any(idx):
             # As a fallback, try the original narrow bounds
             idx = ((self.f > 49) & (self.f < 50)) | ((self.f > 59) & (self.f < 60))
+        if not np.any(idx):
+            # Still nothing: warn and skip narrowing; allow automatic detection later
+            print("Warning: No bins found around 50/60 Hz for 'line' detection; falling back to automatic detection.")
+            self.config['noisefreqs'] = []
+            return None
         spectra_chunk = self.pxx_raw_log[idx, :]
         # Flatten across channels and pick global maximum within the search band
         flat_idx = np.argmax(spectra_chunk)
@@ -302,33 +352,110 @@ class PyZaplinePlus:
         
         return chunk_indices
 
-    def detect_chunk_noise(self, chunk, noise_freq):
+    def detect_chunk_noise(self, chunk, noise_freq, return_details=False):
         """
         Detect noise frequency in a given chunk.
+
+        Returns
+        -------
+        float or tuple
+            If ``return_details`` is ``False`` (default) the function returns the
+            frequency that should be cleaned for the chunk. When
+            ``return_details`` is ``True`` a tuple ``(chunk_noise_freq,
+            found_flag, peak_freq)`` matching the MATLAB bookkeeping is
+            returned.
         """
-        f, pxx_chunk = signal.welch(chunk, fs=self.sampling_rate, nperseg=len(chunk), axis=0)
+        # Use Hann periodic + 50% overlap to match MATLAB parity
+        nperseg = len(chunk)
+        f, pxx_chunk = _welch_hamming_periodic(
+            chunk, fs=self.sampling_rate, nperseg=nperseg, axis=0
+        )
         pxx_log = 10 * np.log10(pxx_chunk)
-        
+
         freq_idx = (f > noise_freq - self.config['detectionWinsize'] / 2) & (f < noise_freq + self.config['detectionWinsize'] / 2)
         detailed_freq_idx = (f > noise_freq + self.config['detailedFreqBoundsUpper'][0]) & \
                             (f < noise_freq + self.config['detailedFreqBoundsUpper'][1])
         detailed_freqs = f[detailed_freq_idx]
-        
+
+        # Guard small-bin and empty-slice cases to avoid crashes on short chunks
+        n_bins_fine = int(np.sum(freq_idx))
+        if n_bins_fine < 3:
+            # Not enough resolution: report no detection and keep global frequency
+            chunk_noise_freq = float(noise_freq)
+            found_flag = 0
+            peak_freq = float(noise_freq)
+            return (
+                (chunk_noise_freq, found_flag, peak_freq)
+                if return_details
+                else chunk_noise_freq
+            )
+
         fine_data = np.mean(pxx_log[freq_idx, :], axis=1)
-        third = len(fine_data) // 3
-        center_data = np.mean([fine_data[:third], fine_data[-third:]])
-        lower_quantile = np.mean([np.quantile(fine_data[:third], 0.05), np.quantile(fine_data[-third:], 0.05)])
+        third = max(1, len(fine_data) // 3)
+        # Avoid quantiles on empty slices
+        center_data = float(np.mean([fine_data[:third], fine_data[-third:]]))
+        lower_quantile = float(np.mean([
+            np.quantile(fine_data[:third], 0.05),
+            np.quantile(fine_data[-third:], 0.05),
+        ]))
         detailed_thresh = center_data + self.config['freqDetectMultFine'] * (center_data - lower_quantile)
-        
-        max_fine_power: float = float(np.max(np.mean(pxx_log[detailed_freq_idx, :], axis=1)))
+
+        # If detailed freq slice is empty, keep the original frequency
+        if detailed_freqs.size < 1:
+            chunk_noise_freq = float(noise_freq)
+            found_flag = 0
+            peak_freq = float(noise_freq)
+            return (
+                (chunk_noise_freq, found_flag, peak_freq)
+                if return_details
+                else chunk_noise_freq
+            )
+
+        # Compute detailed-band max and peak
+        detailed_band_mean = np.mean(pxx_log[detailed_freq_idx, :], axis=1)
+        max_fine_power: float = float(np.max(detailed_band_mean))
+        peak_idx = int(np.argmax(detailed_band_mean))
+        peak_freq = float(detailed_freqs[peak_idx])
         if max_fine_power > detailed_thresh:
-            return detailed_freqs[np.argmax(np.mean(pxx_log[detailed_freq_idx, :], axis=1))]
-        return noise_freq
+            chunk_noise_freq = peak_freq
+            found_flag = 1
+            return (
+                (chunk_noise_freq, found_flag, peak_freq)
+                if return_details
+                else chunk_noise_freq
+            )
+        # No strong local peak found: clean with global noise_freq but report peak
+        chunk_noise_freq = float(noise_freq)
+        found_flag = 0
+        return (
+            (chunk_noise_freq, found_flag, peak_freq)
+            if return_details
+            else chunk_noise_freq
+        )
 
     def apply_zapline_to_chunk(self, chunk, noise_freq):
         """
         Apply noise removal to the chunk using DSS (Denoising Source Separation) based on the provided MATLAB code.
         """
+        chunk = np.asarray(chunk)
+        if chunk.ndim == 1:
+            chunk = chunk[:, np.newaxis]
+
+        # Guard very short chunks: MATLAB requires enough samples for
+        # Welch/DSS; fall back to identity cleaning with a warning.
+        win_sec = float(self.config.get('winSizeCompleteSpectrum', 0) or 0)
+        if win_sec <= 0:
+            win_sec = 1.0
+        guard_sec = min(max(win_sec, 0.5), 2.0)
+        min_chunk_samples = max(int(2 * guard_sec * self.sampling_rate), 2)
+
+        if chunk.shape[0] < min_chunk_samples:
+            warnings.warn(
+                "chunk too short for stable DSS cleaning; skipping component removal.",
+                RuntimeWarning,
+            )
+            return chunk.copy(), 0, np.empty(0, dtype=float)
+
         # Ensure self.config has all necessary default parameters
         config_defaults = {
             'nfft': 1024,
@@ -344,6 +471,10 @@ class PyZaplinePlus:
         for key, value in config_defaults.items():
             if key not in self.config or self.config[key] is None:
                 self.config[key] = value
+
+        # Effective nfft: match MATLAB behavior by reducing nfft if chunk is short
+        nfft_cfg = int(self.config.get('nfft', 1024))
+        nfft = min(nfft_cfg, int(len(chunk)))
 
         # Step 1: Define line frequency normalized to sampling rate
         fline = noise_freq / self.sampling_rate
@@ -363,21 +494,51 @@ class PyZaplinePlus:
         residual_chunk = chunk - smoothed_chunk
 
         # Step 4: PCA to reduce dimensionality and avoid overfitting
-        if self.config['nkeep'] is None:
-            self.config['nkeep'] = residual_chunk.shape[1]
+        nkeep_val = self.config.get('nkeep')
+        if nkeep_val in (None, 0) or (isinstance(nkeep_val, (int, float)) and nkeep_val <= 0):
+            nkeep_val = residual_chunk.shape[1]
+            self.config['nkeep'] = nkeep_val
+        else:
+            nkeep_val = int(nkeep_val)
         truncated_chunk, _ = self.nt_pca(
             residual_chunk,
-            nkeep=self.config['nkeep']
+            nkeep=nkeep_val
         )
 
         # Step 5: DSS to isolate line components from residual
         n_harmonics = int(np.floor(0.5 / fline))
-        harmonics = fline * np.arange(1, n_harmonics + 1)
+        if self.config.get('snapDssToFftBin', False):
+            # Snap each harmonic to the nearest FFT bin index consistent with MATLAB round: floor(x+0.5)
+            harmonic_freqs = []
+            for k in range(1, n_harmonics + 1):
+                f_norm = fline * k
+                idx = int(np.floor(f_norm * nfft + 0.5))
+                idx = max(0, min(idx, nfft // 2))
+                # Inverse mapping to normalized frequency that re-yields idx in nt_bias_fft
+                f_norm_snap = (idx - 0.5) / nfft if idx > 0 else 0.0
+                harmonic_freqs.append(f_norm_snap)
+            harmonics = np.array(harmonic_freqs, dtype=float)
+        else:
+            harmonics = fline * np.arange(1, n_harmonics + 1)
         c0, c1 = self.nt_bias_fft(
             truncated_chunk,
             freq=harmonics,
-            nfft=self.config['nfft']
+            nfft=nfft
         )
+        # Optional: save DSS matrices/scores for parity debugging
+        if self.config.get('saveDssDebug', False):
+            try:
+                import os
+                out_dir = self.config.get('debugOutDir') or os.path.join(os.getcwd(), 'comparisons', 'debug')
+                os.makedirs(out_dir, exist_ok=True)
+                # Use noise freq and chunk length as part of the name
+                tag = f"f{noise_freq:.6f}_n{len(chunk)}"
+                np.savez(
+                    os.path.join(out_dir, f"dss_mats_{tag}.npz"),
+                    c0=c0, c1=c1,
+                )
+            except Exception:
+                pass
         todss, pwr0, pwr1 = self.nt_dss0(c0, c1)
         scores = pwr1 / pwr0
 
@@ -539,9 +700,23 @@ class PyZaplinePlus:
         """
         Apply a bandpass filter to the data.
         """
-        nyquist = 0.5 * fs
-        low = lowcut / nyquist
-        high = highcut / nyquist
+        nyq = 0.5 * fs
+        # Normalize with guards against invalid edges and Nyquist issues
+        low_raw = lowcut / nyq
+        high_raw = highcut / nyq
+        low = max(1e-9, min(low_raw, 0.999999))
+        high = max(1e-9, min(high_raw, 0.999999))
+        # If requested band exceeded Nyquist, clip and warn once
+        if (low_raw != low) or (high_raw != high):
+            if not self._warned_nyquist:
+                warnings.warn(
+                    "Requested band exceeded [0, fs/2]; clipping to valid range.",
+                    RuntimeWarning,
+                )
+                self._warned_nyquist = True
+        # If invalid band, return data unchanged (no-op)
+        if high <= low:
+            return data
         b, a = signal.butter(order, [low, high], btype='band')
         return signal.filtfilt(b, a, data, axis=0)
 
@@ -552,19 +727,10 @@ class PyZaplinePlus:
         """
         Adjust the cleaning process if it was too weak or too strong.
         """
-        from scipy.signal import windows
-
-        # Compute the PSD of the clean data
+        # Compute the PSD of the clean data using periodic Hamming + 50% overlap
         nperseg = int(self.config['winSizeCompleteSpectrum'] * self.sampling_rate)
-        noverlap = int(0.5 * nperseg)  # 50% overlap
-
-        f, pxx_clean = signal.welch(
-            clean_data,
-            fs=self.sampling_rate,
-            window=windows.hann(nperseg, sym=True),
-            nperseg=nperseg,
-            noverlap=noverlap,
-            axis=0
+        f, pxx_clean = _welch_hamming_periodic(
+            clean_data, fs=self.sampling_rate, nperseg=nperseg, axis=0
         )
         pxx_clean_log = 10 * np.log10(pxx_clean)
 
@@ -1128,8 +1294,7 @@ class PyZaplinePlus:
             # Reverse to descending order
             eigenvalues_all = eigenvalues_all[::-1]
             eigenvectors_all = eigenvectors_all[:, ::-1]
-            # Filter out negative eigenvalues
-            eigenvalues_all=np.abs(eigenvalues_all)
+            # Covariance is positive semidefinite; keep as-is for true MATLAB parity
             # positive_idx = eigenvalues_all > 0
             # eigenvalues_all = eigenvalues_all[positive_idx]
             # eigenvectors_all = eigenvectors_all[:, positive_idx]
@@ -1443,14 +1608,14 @@ class PyZaplinePlus:
 
         if freq.ndim == 1:
             for k in range(freq.shape[0]):
-                idx = int(round(freq[k] * nfft + 0.5))
+                idx = int(np.floor(freq[k] * nfft + 0.5))
                 if idx >= len(filt):
                     raise ValueError(f"Frequency index {idx} out of bounds for filter of length {len(filt)}.")
                 filt[idx] = 1
         elif freq.shape[0] == 2:
             for k in range(freq.shape[1]):
-                start_idx = int(round(freq[0, k] * nfft + 0.5))
-                end_idx = int(round(freq[1, k] * nfft + 0.5)) + 1
+                start_idx = int(np.floor(freq[0, k] * nfft + 0.5))
+                end_idx = int(np.floor(freq[1, k] * nfft + 0.5)) + 1
                 if start_idx >= len(filt) or end_idx > len(filt):
                     raise ValueError(f"Frequency slice [{start_idx}:{end_idx}] out of bounds for filter of length {len(filt)}.")
                 filt[start_idx:end_idx] = 1
@@ -1458,10 +1623,18 @@ class PyZaplinePlus:
             raise ValueError("freq should have one or two rows")
 
         # Symmetrize the Filter
-        filt_full = np.concatenate([filt, np.flip(filt[1:-1])])
+        # Build full-spectrum filter. Optionally force positive-bin-only for dev parity experiments.
+        if self.config.get('dss_positive_only', False) and freq.ndim == 1 and freq.size > 0:
+            # Positive-bin-only mask: keep only exact positive bin indices, no mirrored negative bins
+            filt_full = np.zeros(nfft, dtype=float)
+            for k in range(freq.shape[0]):
+                idx = int(np.floor(freq[k] * nfft + 0.5))
+                filt_full[idx] = 1.0
+        else:
+            filt_full = np.concatenate([filt, np.flip(filt[1:-1])])
 
-        # Hann Window
-        w = windows.hann(nfft, sym=False)
+        # Hann Window (symmetric to match MATLAB hanning(nfft))
+        w = windows.hann(nfft, sym=True)
 
         # Handle 2D and 3D Data
         if x.ndim == 2:
@@ -1489,19 +1662,32 @@ class PyZaplinePlus:
         # Initialize c1: Biased Covariance Matrix
         c1 = np.zeros_like(c0)
 
-        # Calculate Number of Frames
-        nframes = int(np.ceil((n_samples - nfft / 2) / (nfft / 2)))
+        # Calculate frame start indices (50% overlap). For MATLAB parity, restrict to
+        # full windows excluding the trailing partial pair so that frames = 2*floor(m/nfft)-3
+        # which matches observed behavior in zapline-plus' nt_bias_fft usage.
+        if self.config.get('dss_strict_frames', True):
+            windows_full = max(0, int(np.floor(n_samples / nfft) - 1))
+            max_start = int(max(0, windows_full * nfft))
+            starts = list(range(0, max_start + 1, nfft // 2))
+        else:
+            nframes = int(np.ceil((n_samples - nfft / 2) / (nfft / 2)))
+            starts = [int(min(k * (nfft // 2), n_samples - nfft)) for k in range(nframes)]
 
         for trial in range(n_trials):
-            for k in range(nframes):
-                idx = int(k * nfft // 2)
-                idx = min(idx, n_samples - nfft)
+            for idx in starts:
                 z = x[idx:idx + nfft, :, trial]  # (nfft, n_channels)
                 z = self.nt_vecmult(z,w)  # Apply Hann window
                 Z = fft(z, axis=0)
                 Z = self.nt_vecmult(Z, filt_full)  # Apply filter
                 cov_matrix = np.real(np.dot(Z.conj().T, Z))  # (n_channels, n_channels)
                 c1 += cov_matrix
+
+        # Optional window-energy normalization (dev parity control)
+        if self.config.get('dss_divide_by_sumw2', False):
+            from numpy import sum as npsum
+            denom = float(npsum(w**2))
+            if denom > 0:
+                c1 = c1 / denom
 
         return c0, c1
     def nt_dss0(self, c0, c1, keep1=None, keep2=10**-9):
@@ -1530,16 +1716,13 @@ class PyZaplinePlus:
 
         # PCA and whitening matrix from the unbiased covariance
         topcs1, evs1 = self.nt_pcarot(c0, keep1, keep2)
+        # Match MATLAB nt_dss0.m: take absolute eigenvalues before whitening
         evs1 = np.abs(evs1)
 
-        # Truncate PCA series if needed
+        # Truncate PCA series if needed (thresholding already handled inside nt_pcarot)
         if keep1 is not None:
             topcs1 = topcs1[:, :keep1]
             evs1 = evs1[:keep1]
-        if keep2 is not None:
-            idx = np.where(evs1 > keep2)[0]  # Extract the first element from the tuple
-            topcs1 = topcs1[:, idx]
-            evs1 = evs1[idx]
 
         # Apply PCA and whitening to the biased covariance
         evs1_sqrt=1.0 / np.sqrt(evs1)
@@ -1554,9 +1737,12 @@ class PyZaplinePlus:
         N2 = np.diag(todss.T @ c0 @ todss)
         todss = todss @ np.diag(1.0 / np.sqrt(N2))  # Adjust so that components are normalized
 
-        # Power per DSS component
-        pwr0 = np.sqrt(np.sum((c0 @ todss) ** 2, axis=0))  # Unbiased
-        pwr1 = np.sqrt(np.sum((c1 @ todss) ** 2, axis=0))  # Biased
+        # Power per DSS component (match MATLAB's nt_dss0.m formulation)
+        # pwr0 = sqrt(sum((c0' * todss).^2)), pwr1 = sqrt(sum((c1' * todss).^2))
+        P0 = c0.T @ todss
+        P1 = c1.T @ todss
+        pwr0 = np.sqrt(np.sum(P0 ** 2, axis=0))
+        pwr1 = np.sqrt(np.sum(P1 ** 2, axis=0))
 
         return todss, pwr0, pwr1
     def nt_tsr(self, x, ref, shifts=None, wx=None, wref=None, keep=None, thresh=1e-20):
@@ -1853,12 +2039,16 @@ class PyZaplinePlus:
             x_demeaned (np.ndarray): Demeaned data array.
             mn (np.ndarray): Mean values that were removed.
         """
+        added_trial_dim = False
         if x.ndim == 2:
-            n_dim=2
-            x=x[:,:,np.newaxis]
-            w=w[:,:,np.newaxis]
+            x = x[:, :, np.newaxis]
+            added_trial_dim = True
+            # Only expand w if provided
+            if w is not None and w.ndim == 2:
+                w = w[:, :, np.newaxis]
+
+        # Interpret index-form weights if provided and smaller than time dimension
         if w is not None and w.size < x.shape[0]:
-            # Interpret w as array of indices to set to 1
             w_indices = w.flatten()
             if np.min(w_indices) < 0 or np.max(w_indices) >= x.shape[0]:
                 raise ValueError('w interpreted as indices but values are out of range')
@@ -1866,7 +2056,8 @@ class PyZaplinePlus:
             w_full[w_indices, :, :] = 1
             w = w_full
 
-        if w is not None and w.shape[2] != x.shape[2]:
+        # Broadcast weights across trials if needed
+        if w is not None and w.ndim == 3 and w.shape[2] != x.shape[2]:
             if w.shape[2] == 1 and x.shape[2] != 1:
                 w = np.tile(w, (1, 1, x.shape[2]))
             else:
@@ -1877,10 +2068,23 @@ class PyZaplinePlus:
 
         if w is None:
             # Unweighted mean
-            mn = np.mean(x_unfolded, axis=0)
+            mn = np.mean(x_unfolded, axis=0, keepdims=True)
             x_demeaned = x_unfolded - mn
         else:
-            w_unfolded = w.reshape(m, -1)
+            # Ensure weights have shape (time, channels*trials)
+            if w.ndim == 3:
+                w_unfolded = w.reshape(m, -1)
+            elif w.ndim == 2:
+                # If provided as (time, 1), tile across channels*trials
+                if w.shape[1] == 1:
+                    w_unfolded = np.tile(w, (1, x_unfolded.shape[1]))
+                else:
+                    if w.shape[1] != x_unfolded.shape[1]:
+                        raise ValueError('Weight matrix should match unfolded data width')
+                    w_unfolded = w
+            else:
+                raise ValueError('Weight matrix has invalid dimensions')
+
             if w_unfolded.shape[0] != x_unfolded.shape[0]:
                 raise ValueError('x and w should have the same number of time samples')
 
@@ -1890,7 +2094,7 @@ class PyZaplinePlus:
 
         x_demeaned = x_demeaned.reshape(m, n, o)
         mn = mn.reshape(1, n, o)
-        if n_dim == 2:
+        if added_trial_dim:
             x_demeaned = x_demeaned.squeeze(-1)  # Remove the last dimension if singleton
             mn = mn.squeeze(-1)
         return x_demeaned, mn
@@ -1982,7 +2186,8 @@ class PyZaplinePlus:
 
         # Discard negligible regressor PCs
         if keep is not None:
-            keep = max(keep, topcs.shape[1])
+            # Keep at most `keep` components, not more
+            keep = min(keep, topcs.shape[1])
             topcs = topcs[:, :keep]
             eigenvalues = eigenvalues[:keep]
 
@@ -2052,7 +2257,7 @@ class PyZaplinePlus:
         """
         Compute and optionally plot the power spectrum of the data.
         """
-        f, pxx = signal.welch(data, fs=fs, nperseg=nfft, axis=0)
+        f, pxx = _welch_hamming_periodic(data, fs=fs, nperseg=nfft, axis=0)
         if return_data:
             return pxx, f
         else:
@@ -2426,20 +2631,32 @@ class PyZaplinePlus:
                 for i_chunk in range(n_chunks):
                     chunk = self.data[chunk_indices[i_chunk]:chunk_indices[i_chunk+1], :]
                     
+                    # Determine per-chunk noise peak and whether it's a clear detection
                     if self.config['searchIndividualNoise']:
-                        chunk_noise_freq = self.detect_chunk_noise(chunk, noise_freq)
+                        chunk_noise_freq, found_flag, peak_freq = self.detect_chunk_noise(
+                            chunk,
+                            noise_freq,
+                            return_details=True,
+                        )
                     else:
-                        chunk_noise_freq = noise_freq
+                        chunk_noise_freq, found_flag, peak_freq = noise_freq, 1, noise_freq
+
+                    # If no clear chunk-specific peak, disable adaptive removal for this chunk (MATLAB behavior)
+                    orig_adapt = bool(self.config.get('adaptiveNremove', True))
+                    if not found_flag:
+                        self.config['adaptiveNremove'] = False
 
                     clean_chunk, n_remove, chunk_scores = self.apply_zapline_to_chunk(chunk, chunk_noise_freq)
+                    # Restore adaptive setting after per-chunk cleaning
+                    self.config['adaptiveNremove'] = orig_adapt
                     clean_data[chunk_indices[i_chunk]:chunk_indices[i_chunk+1], :] = clean_chunk
                     
                     # Store DSS scores for this chunk (pad/truncate to configured width like MATLAB)
                     n_to_copy = min(scores.shape[1], len(chunk_scores))
                     scores[i_chunk, :n_to_copy] = chunk_scores[:n_to_copy]
                     n_remove_final[i_chunk] = n_remove
-                    noise_peaks[i_chunk] = chunk_noise_freq
-                    found_noise[i_chunk] = 1 if chunk_noise_freq != noise_freq else 0
+                    noise_peaks[i_chunk] = peak_freq
+                    found_noise[i_chunk] = float(found_flag)
 
                 pxx_clean_log, f = self.compute_spectrum(clean_data)
                 # For analytics we only need raw and clean; removed spectrum is computed for plotting later
@@ -2452,6 +2669,7 @@ class PyZaplinePlus:
                 self.config['noiseCompDetectSigma'] = zapline_config.get('noiseCompDetectSigma', self.config['noiseCompDetectSigma'])
                 self.config['fixedNremove'] = zapline_config.get('fixedNremove', self.config['fixedNremove'])
                 zapline_config['noisePeaks'] = noise_peaks
+                zapline_config['foundNoise'] = found_noise
                 zapline_config['scores'] = scores
             if self.config['plotResults']:
                 pxx_removed_log, _ = self.compute_spectrum(self.data - clean_data)
