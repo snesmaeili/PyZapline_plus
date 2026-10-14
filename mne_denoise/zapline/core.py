@@ -765,8 +765,8 @@ class ZapLine(DSS):
             "chunk_info": all_chunk_metadata,
         }
 
-    def _process_segment(self, chunk: np.ndarray) -> dict:
-        """Clean one segment with the ZapLine spectral-QA retry loop."""
+    def _process_segment(self, chunk: np.ndarray, start: int = 0) -> dict:
+        """Clean one segment with the ZapLine spectral-QA retry loop (``start`` unused)."""
         params = self.adaptive_params
         n_remove_params = params.get("n_remove_params", {})
         qa_params = params.get("qa_params", {})
