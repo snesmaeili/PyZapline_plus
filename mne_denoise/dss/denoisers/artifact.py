@@ -203,6 +203,23 @@ class CycleAverageBias(LinearDenoiser):
             raise ValueError("min_events must be greater than or equal to 2")
         self._window_length = self.window[1] - self.window[0]
 
+    def _for_segment(self, start: int, stop: int) -> CycleAverageBias:
+        """Return this bias for ``data[:, start:stop]``, events shifted into it.
+
+        Segmented (adaptive) DSS fits each segment on its own; events whose window
+        does not fit inside the segment are left out of it.
+        """
+        events = self.event_samples_data_
+        if events.ndim != 1:
+            raise ValueError(
+                "Segmented DSS needs one-dimensional event samples, got "
+                "(epoch_index, sample_index) pairs."
+            )
+        inside = (events + self.window[0] >= start) & (events + self.window[1] <= stop)
+        return CycleAverageBias(
+            events[inside] - start, self.window, min_events=self.min_events
+        )
+
     def apply(self, data: np.ndarray) -> np.ndarray:
         """Apply fixed-window event-locked averaging.
 

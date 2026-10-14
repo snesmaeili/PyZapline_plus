@@ -1164,7 +1164,8 @@ class DSS(BaseEstimator, TransformerMixin):
         if sfreq is None:
             raise ValueError(
                 "Cannot determine sfreq for adaptive mode. "
-                "Pass an MNE object or use a bias with a .sfreq attribute."
+                "Pass an MNE object or a bias with sfreq set, "
+                "e.g. CycleAverageBias(..., sfreq=...)."
             )
 
         # Handle epochs: concatenate into continuous
@@ -1290,7 +1291,7 @@ class DSS(BaseEstimator, TransformerMixin):
                 ext_start, ext_end = start, end
 
             chunk = data[:, ext_start:ext_end]
-            result = self._process_segment(chunk)
+            result = self._process_segment(chunk, start=ext_start)
 
             cleaned_chunks.append(
                 {
@@ -1337,8 +1338,8 @@ class DSS(BaseEstimator, TransformerMixin):
             return overlap_add_combine(data.shape, cleaned_chunks)
         return np.concatenate([c["data"] for c in cleaned_chunks], axis=1)
 
-    def _make_segment_estimator(self) -> DSS:
-        """Build an unfitted DSS clone configured for one segment."""
+    def _make_segment_estimator(self, start: int = 0, stop: int | None = None) -> DSS:
+        """Build an unfitted DSS clone configured for ``data[:, start:stop]``."""
         est = clone(self)
         est.set_params(
             adaptive=False,  # do NOT recurse
@@ -1356,12 +1357,15 @@ class DSS(BaseEstimator, TransformerMixin):
             # are numerical helpers and must not emit duplicate DSS INFO.
             verbose="WARNING",
         )
+        # An event-locked bias holds sample positions in the whole recording.
+        if stop is not None and hasattr(self.bias, "_for_segment"):
+            est.set_params(bias=self.bias._for_segment(start, stop))
         return est
 
-    def _process_segment(self, chunk: np.ndarray) -> dict:
-        """Fit, select, and clean one DSS segment."""
+    def _process_segment(self, chunk: np.ndarray, start: int = 0) -> dict:
+        """Fit, select, and clean one DSS segment starting at sample ``start``."""
         n_channels = chunk.shape[0]
-        seg_dss = self._make_segment_estimator()
+        seg_dss = self._make_segment_estimator(start, start + chunk.shape[1])
         # Adaptive DSS owns the aggregate INFO record; segment DSS fits are
         # implementation details rather than separate user-facing results.
         seg_dss.fit(chunk, verbose="WARNING")

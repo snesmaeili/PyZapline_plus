@@ -785,6 +785,39 @@ class TestSegmentedDSS:
         with pytest.raises(ValueError, match="sfreq"):
             dss.fit_transform(data)
 
+    def test_event_locked_bias_follows_each_segment(self):
+        """Each segment is fitted with the events that fall inside it."""
+        from mne_denoise.dss.denoisers import CycleAverageBias
+
+        rng = np.random.default_rng(0)
+        sfreq = 250.0
+        n_times = int(sfreq * 120)
+        events = np.arange(225, n_times - 225, 225)  # a heartbeat every 0.9 s
+        pulse = np.zeros(n_times)
+        for event in events:
+            pulse[event - 20 : event + 21] += np.exp(-(np.arange(-20, 21) ** 2) / 20)
+        data = rng.standard_normal((8, n_times))
+        data += np.outer(rng.standard_normal(8), pulse) * 3
+
+        bias = CycleAverageBias(events, window=(-40, 60), sfreq=sfreq)
+        kwargs = {"n_select": 1, "component_action": "subtract"}
+        global_fit = DSS(bias, **kwargs).fit(data).transform(data)
+        segmented = DSS(
+            bias,
+            adaptive=True,
+            segmenter=FixedWindowSegmenter(sfreq, window_len=30.0),
+            **kwargs,
+        ).fit_transform(data)
+
+        def locked(x):
+            return np.linalg.norm(
+                np.mean([x[:, event - 20 : event + 21] for event in events], axis=0)
+            )
+
+        # The artifact is stationary: four 30 s fits leave about what one global fit
+        # leaves (12 % of the event-locked average here, the noise alone 7 %).
+        assert locked(segmented) < 1.5 * locked(global_fit) < locked(data)
+
     def test_segment_results_populated(self):
         """Adaptive fitting keeps global state and local segment topology."""
         data, sfreq = _make_nonstationary_line_noise()
