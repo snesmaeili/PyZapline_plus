@@ -6,7 +6,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>mne_denoise.dss.denoisers.artifact &#8212; mne-denoise 0.0.4.dev2+ga6b297a27 documentation</title>
+    <title>mne_denoise.dss.denoisers.artifact &#8212; mne-denoise 0.0.4.dev3+g8b66d48b1 documentation</title>
   
   
   
@@ -43,7 +43,7 @@
   <link rel="preload" as="script" href="../../../../_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be" />
 <link rel="preload" as="script" href="../../../../_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be" />
 
-    <script src="../../../../_static/documentation_options.js?v=e03dd328"></script>
+    <script src="../../../../_static/documentation_options.js?v=81e8a86f"></script>
     <script src="../../../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -64,7 +64,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.0.4.dev2+ga6b297a27" />
+  <meta name="docsearch:version" content="0.0.4.dev3+g8b66d48b1" />
   
     
     <script src="../../../../_static/searchtools.js"></script>
@@ -663,6 +663,23 @@
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">min_events</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"min_events must be greater than or equal to 2"</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_window_length</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">window</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">window</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_for_segment</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">start</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">stop</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">CycleAverageBias</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Return this bias for ``data[:, start:stop]``, events shifted into it.</span>
+
+<span class="sd">        Segmented (adaptive) DSS fits each segment on its own; events whose window</span>
+<span class="sd">        does not fit inside the segment are left out of it.</span>
+<span class="sd">        """</span>
+        <span class="n">events</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">event_samples_data_</span>
+        <span class="k">if</span> <span class="n">events</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"Segmented DSS needs one-dimensional event samples, got "</span>
+                <span class="s2">"(epoch_index, sample_index) pairs."</span>
+            <span class="p">)</span>
+        <span class="n">inside</span> <span class="o">=</span> <span class="p">(</span><span class="n">events</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">window</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="n">start</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">events</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">window</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">stop</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">CycleAverageBias</span><span class="p">(</span>
+            <span class="n">events</span><span class="p">[</span><span class="n">inside</span><span class="p">]</span> <span class="o">-</span> <span class="n">start</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">window</span><span class="p">,</span> <span class="n">min_events</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">min_events</span>
+        <span class="p">)</span>
 
 <div class="viewcode-block" id="CycleAverageBias.apply">
 <a class="viewcode-back" href="../../../../generated/mne_denoise.dss.CycleAverageBias.html#mne_denoise.dss.CycleAverageBias.apply">[docs]</a>
