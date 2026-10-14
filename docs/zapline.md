@@ -33,6 +33,34 @@ clean = model.fit_transform(raw)
 A reduction at the line frequency can also attenuate an overlapping neural
 rhythm. Inspect the fitted component and segment diagnostics.
 
+## Number of removed components
+
+ZapLine splits the data into a part smoothed over one line period, which keeps
+no line, and a residual, and removes DSS components from the residual only. The
+residual also holds most of the activity above about half the line frequency,
+so each removed component lowers broadband power in its spatial direction as
+well as the line.
+
+In standard mode, `n_select="auto"` takes the larger of two counts on the DSS
+scores (`eigenvalues_`): the scores that stand out as outliers, and the
+components above the largest drop between consecutive scores within the top
+half of the scores. When both counts are zero but a
+line peak is detected, ZapLine evaluates 1, 2, ... components and keeps the
+first whose spectrum passes its spectral check; when none passes, it keeps the
+last count the check rated too weak, or every component.
+
+## Line noise from many sources
+
+When each sensor picks up its own line noise, for example through poor
+contacts, the line spreads over many DSS components with similar scores:
+several large `eigenvalues_` that decay smoothly instead of one or two that
+stand out. ZapLine then needs most components to remove the line and lowers
+broadband power accordingly. Check `n_removed_` against the number of
+channels; to bound the broadband cost, set `n_select` to a small count and
+remove what is left channel by channel with
+{class}`~mne_denoise.spectrum_interpolation.SpectrumInterpolation` or a notch
+filter.
+
 ## References
 
 ```{footbibliography}
