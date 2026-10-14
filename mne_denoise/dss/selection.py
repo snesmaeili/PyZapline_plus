@@ -138,6 +138,11 @@ def auto_select_components_robust(
 ) -> int:
     """Combine outlier and knee component counts and return the larger count.
 
+    The knee is searched among the top half of the scores only. Below that, one
+    component with almost no power in the bias band (e.g. a strong alpha rhythm
+    under a line-noise bias) can make the largest drop the last one, which would
+    select every other component.
+
     Parameters
     ----------
     eigenvalues : array-like
@@ -155,7 +160,8 @@ def auto_select_components_robust(
         Larger of the two proposed counts.
     """
     n_outlier = iterative_outlier_removal(eigenvalues, sigma=sigma)
+    top_half = np.asarray(eigenvalues)[: np.size(eigenvalues) // 2 + 1]
     n_knee = detect_eigenvalue_knee(
-        eigenvalues, rel_floor=knee_rel_floor, min_ratio=knee_min_ratio
+        top_half, rel_floor=knee_rel_floor, min_ratio=knee_min_ratio
     )
     return int(max(n_outlier, n_knee))

@@ -290,6 +290,21 @@ def test_zapline_removes_strong_line_at_fractional_period():
     assert _power_at(cleaned, 60.0, sfreq) < _power_at(clean, 60.0, sfreq) * 10**0.1
 
 
+def test_zapline_auto_selection_ignores_a_strong_rhythm_away_from_the_line():
+    """A strong alpha rhythm does not change how many components are removed."""
+    rng = np.random.default_rng(0)
+    sfreq = 500.0
+    times = np.arange(int(sfreq * 60)) / sfreq
+    noise = rng.standard_normal((19, len(times)))
+    alpha = np.outer(rng.standard_normal(19), np.sin(2 * np.pi * 10 * times)) * 5
+
+    # The alpha source has almost no power at 60 Hz, so its DSS score drops far
+    # below the others, at the bottom of the spectrum.
+    n_noise = ZapLine(sfreq=sfreq, line_freq=60.0).fit(noise).n_removed_
+    n_alpha = ZapLine(sfreq=sfreq, line_freq=60.0).fit(noise + alpha).n_removed_
+    assert n_alpha == n_noise
+
+
 def test_zapline_requires_line_frequency_in_standard_mode():
     """Standard fitting requires a target frequency."""
     data = np.random.default_rng(0).standard_normal((4, 1000))
