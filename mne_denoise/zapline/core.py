@@ -614,8 +614,18 @@ class ZapLine(DSS):
         return data_smooth, data_residual
 
     def _fractional_smooth(self, data: np.ndarray, period: float) -> np.ndarray:
-        """Apply fractional-period boxcar smoothing."""
-        from scipy.signal import lfilter
+        """Apply a causal boxcar of a fractional number of samples.
+
+        The boxcar is applied in the frequency domain as the Dirichlet kernel
+        ``sin(pi f T) / (T sin(pi f))`` with the boxcar's delay of ``(T - 1) / 2``
+        samples, where ``T`` is the period in samples and ``f`` the frequency in
+        cycles per sample. It is exactly zero at every multiple of the line
+        frequency below Nyquist, and for a whole number of samples it equals the
+        running mean of the integer-period branch. A sampled kernel
+        ``[1 ... 1 frac] / T`` only approximates these zeros: at 200 Hz and 60 Hz
+        it passes the line at -23 dB, which the smooth branch then keeps uncleaned.
+        """
+        from scipy.fft import irfft, next_fast_len, rfft, rfftfreq
 
         n_times = data.shape[-1]
         period = float(period)
@@ -624,28 +634,23 @@ class ZapLine(DSS):
             # Degenerate case (should not occur for valid line frequencies).
             return data.copy()
 
-        integ = int(np.floor(period))
-        frac = period - integ
-
-        if integ >= n_times:
+        if period >= n_times:
             mean = np.mean(data, axis=-1, keepdims=True)
             return np.repeat(mean, n_times, axis=-1)
 
-        # remove onset step, filter, then restore DC.
-        mean_head = np.mean(data[..., : integ + 1], axis=-1, keepdims=True)
-        centered = data - mean_head
-
-        if np.isclose(frac, 0.0):
-            # Fast path for integer period using cumulative sums.
-            smoothed = np.cumsum(centered, axis=-1)
-            smoothed[..., integ:] = smoothed[..., integ:] - smoothed[..., :-integ]
-            smoothed = smoothed / float(integ)
-        else:
-            kernel = np.concatenate([np.ones(integ), [frac]]) / period
-            smoothed = lfilter(kernel, [1.0], centered, axis=-1)
-
-        smoothed += mean_head
-        return smoothed
+        # Reflect a few periods at each end so the circular convolution of the FFT
+        # does not wrap one edge of the recording onto the other.
+        n_pad = min(int(np.ceil(4 * period)), n_times - 1)
+        padded = np.pad(
+            data, [(0, 0)] * (data.ndim - 1) + [(n_pad, n_pad)], mode="reflect"
+        )
+        n_fft = next_fast_len(padded.shape[-1], real=True)
+        freqs = rfftfreq(n_fft)
+        dirichlet = np.sinc(freqs * period) / np.sinc(freqs)
+        spectrum = rfft(padded, n=n_fft, axis=-1)
+        spectrum *= dirichlet * np.exp(-1j * np.pi * freqs * (period - 1))
+        smoothed = irfft(spectrum, n=n_fft, axis=-1)
+        return smoothed[..., n_pad : n_pad + n_times]
 
     # =========================================================================
     # Adaptive Mode (ZapLine-plus) Methods

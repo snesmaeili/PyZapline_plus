@@ -274,6 +274,22 @@ def test_zapline_supports_requested_line_frequency():
     assert _power_at(cleaned, 60.0, sfreq) < _power_at(data, 60.0, sfreq) * 0.5
 
 
+def test_zapline_removes_strong_line_at_fractional_period():
+    """A strong line is removed when the period is not a whole number of samples."""
+    rng = np.random.default_rng(3)
+    sfreq = 200.0  # 60 Hz line: a period of 10/3 samples
+    times = np.arange(int(sfreq * 60)) / sfreq
+    clean = rng.standard_normal((8, len(times)))
+    line = rng.standard_normal((8, 1)) * np.sin(2 * np.pi * 60.0 * times) * 30.0
+
+    cleaned = ZapLine(line_freq=60.0, sfreq=sfreq, n_select=1).fit_transform(
+        clean + line
+    )
+
+    # The line is ~47 dB above the floor; at most 1 dB of it may remain.
+    assert _power_at(cleaned, 60.0, sfreq) < _power_at(clean, 60.0, sfreq) * 10**0.1
+
+
 def test_zapline_requires_line_frequency_in_standard_mode():
     """Standard fitting requires a target frequency."""
     data = np.random.default_rng(0).standard_normal((4, 1000))
