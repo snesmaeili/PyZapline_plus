@@ -6,7 +6,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>mne_denoise.zapline.core &#8212; mne-denoise 0.0.4.dev6+ge605b78ef documentation</title>
+    <title>mne_denoise.zapline.core &#8212; mne-denoise 0.0.4.dev7+g6fe2bf0b1 documentation</title>
   
   
   
@@ -43,7 +43,7 @@
   <link rel="preload" as="script" href="../../../_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be" />
 <link rel="preload" as="script" href="../../../_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be" />
 
-    <script src="../../../_static/documentation_options.js?v=b8a37125"></script>
+    <script src="../../../_static/documentation_options.js?v=77809940"></script>
     <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -64,7 +64,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.0.4.dev6+ge605b78ef" />
+  <meta name="docsearch:version" content="0.0.4.dev7+g6fe2bf0b1" />
   
     
     <script src="../../../_static/searchtools.js"></script>
@@ -931,7 +931,12 @@
                 <span class="n">dewhitener</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_dewhitener_</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">mixing_</span> <span class="o">=</span> <span class="n">full_mixing</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_full_filters_</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_full_mixing_</span> <span class="o">=</span> <span class="n">full_filters</span><span class="p">,</span> <span class="n">full_mixing</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_qa_filters_</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_qa_mixing_</span> <span class="o">=</span> <span class="n">qa_filters</span><span class="p">,</span> <span class="n">qa_mixing</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_select_components</span><span class="p">(</span><span class="n">data_work</span><span class="p">,</span> <span class="n">data_residual</span><span class="p">)</span>
 
+    <span class="k">def</span><span class="w"> </span><span class="nf">_select_components</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data_work</span><span class="p">,</span> <span class="n">data_residual</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Choose and keep the removed components of the fitted decomposition."""</span>
         <span class="c1"># 4. Resolve the component count. DSS.auto_select handles both the 'auto' and</span>
         <span class="c1"># the explicit-int cases, so the primary policy lives in exactly one place.</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">n_removed_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">auto_select</span><span class="p">()</span>
@@ -945,11 +950,13 @@
                     <span class="s2">"component counts spectrally."</span><span class="p">,</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">line_freq</span><span class="p">,</span>
                 <span class="p">)</span>
+                <span class="k">if</span> <span class="n">data_residual</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">data_residual</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_residual</span><span class="p">(</span><span class="n">data_work</span><span class="p">)</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">n_removed_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_find_min_components_for_line_suppression</span><span class="p">(</span>
                     <span class="n">data_smooth</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_smooth</span><span class="p">(</span><span class="n">data_work</span><span class="p">),</span>
                     <span class="n">data_residual</span><span class="o">=</span><span class="n">data_residual</span><span class="p">,</span>
-                    <span class="n">full_filters</span><span class="o">=</span><span class="n">qa_filters</span><span class="p">,</span>
-                    <span class="n">full_mixing</span><span class="o">=</span><span class="n">qa_mixing</span><span class="p">,</span>
+                    <span class="n">full_filters</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_qa_filters_</span><span class="p">,</span>
+                    <span class="n">full_mixing</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_qa_mixing_</span><span class="p">,</span>
                 <span class="p">)</span>
                 <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
                     <span class="s2">"ZapLine spectral fallback selected </span><span class="si">%d</span><span class="s2"> components."</span><span class="p">,</span>
@@ -966,14 +973,26 @@
 
         <span class="c1"># 5. Truncate to line-dominated DSS components.</span>
         <span class="c1"># Use DSS mixing from the full decomposition to reconstruct artifacts.</span>
+        <span class="n">n_channels</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_full_mixing_</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_removed_</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">filters_</span> <span class="o">=</span> <span class="n">full_filters</span><span class="p">[:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_removed_</span><span class="p">]</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_artifact_mixing_</span> <span class="o">=</span> <span class="n">full_mixing</span><span class="p">[:,</span> <span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_removed_</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">filters_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_full_filters_</span><span class="p">[:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_removed_</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_artifact_mixing_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_full_mixing_</span><span class="p">[:,</span> <span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_removed_</span><span class="p">]</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">patterns_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_artifact_mixing_</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">filters_</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">patterns_</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">data</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">0</span><span class="p">))</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_artifact_mixing_</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">data</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">0</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">filters_</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">0</span><span class="p">,</span> <span class="n">n_channels</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">patterns_</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">n_channels</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_artifact_mixing_</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">n_channels</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_reselect</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">n_select</span><span class="p">,</span> <span class="n">threshold</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Select another number of components without refitting the DSS."""</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_select</span> <span class="o">=</span> <span class="n">n_select</span>
+        <span class="k">if</span> <span class="n">threshold</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">threshold</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">selection_threshold</span> <span class="o">=</span> <span class="n">threshold</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">whiten</span><span class="p">:</span>
+            <span class="n">data</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_prewhiten_sensor_data</span><span class="p">(</span>
+                <span class="n">data</span><span class="p">,</span> <span class="n">info</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_whitening_info_</span><span class="p">,</span> <span class="n">ch_names</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_mne_ch_names_</span>
+            <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_select_components</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_find_min_components_for_line_suppression</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
@@ -1279,25 +1298,28 @@
         <span class="n">res_n_removed</span> <span class="o">=</span> <span class="mi">0</span>
         <span class="n">res_cleaned</span> <span class="o">=</span> <span class="n">chunk</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
 
-        <span class="k">for</span> <span class="n">_retry</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">max_retries</span><span class="p">):</span>
-            <span class="c1"># Fresh ZapLine for this chunk. Deriving it from get_params()</span>
-            <span class="c1"># carries every setting (rank, reg, whiten, nfft, ...) rather than</span>
-            <span class="c1"># silently dropping whatever this call site forgot to list.</span>
-            <span class="n">est</span> <span class="o">=</span> <span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)(</span>
-                <span class="o">**</span><span class="p">{</span>
-                    <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">get_params</span><span class="p">(),</span>
-                    <span class="s2">"line_freq"</span><span class="p">:</span> <span class="n">fine_freq</span><span class="p">,</span>
-                    <span class="s2">"n_select"</span><span class="p">:</span> <span class="s2">"auto"</span><span class="p">,</span>
-                    <span class="s2">"threshold"</span><span class="p">:</span> <span class="n">current_sigma</span><span class="p">,</span>
-                    <span class="s2">"adaptive"</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
-                    <span class="s2">"crossfade"</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>
-                    <span class="s2">"verbose"</span><span class="p">:</span> <span class="s2">"WARNING"</span><span class="p">,</span>
-                <span class="p">}</span>
-            <span class="p">)</span>
+        <span class="c1"># ZapLine for this chunk. Deriving it from get_params() carries every</span>
+        <span class="c1"># setting (rank, reg, whiten, nfft, ...) rather than silently dropping</span>
+        <span class="c1"># whatever this call site forgot to list.</span>
+        <span class="n">est</span> <span class="o">=</span> <span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)(</span>
+            <span class="o">**</span><span class="p">{</span>
+                <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">get_params</span><span class="p">(),</span>
+                <span class="s2">"line_freq"</span><span class="p">:</span> <span class="n">fine_freq</span><span class="p">,</span>
+                <span class="s2">"n_select"</span><span class="p">:</span> <span class="s2">"auto"</span><span class="p">,</span>
+                <span class="s2">"threshold"</span><span class="p">:</span> <span class="n">current_sigma</span><span class="p">,</span>
+                <span class="s2">"adaptive"</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+                <span class="s2">"crossfade"</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>
+                <span class="s2">"verbose"</span><span class="p">:</span> <span class="s2">"WARNING"</span><span class="p">,</span>
+            <span class="p">}</span>
+        <span class="p">)</span>
 
-            <span class="c1"># Adaptive ZapLine owns the segment-level aggregate report; hide</span>
-            <span class="c1"># each retry's nested DSS fit from the user-facing INFO stream.</span>
-            <span class="n">est</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">chunk</span><span class="p">)</span>
+        <span class="c1"># Adaptive ZapLine owns the segment-level aggregate report; hide the</span>
+        <span class="c1"># nested DSS fit from the user-facing INFO stream. The decomposition does</span>
+        <span class="c1"># not depend on the selection, so the retries only re-select components.</span>
+        <span class="n">est</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">chunk</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">_retry</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">max_retries</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">_retry</span><span class="p">:</span>
+                <span class="n">est</span><span class="o">.</span><span class="n">_reselect</span><span class="p">(</span><span class="n">chunk</span><span class="p">,</span> <span class="n">n_select</span><span class="o">=</span><span class="s2">"auto"</span><span class="p">,</span> <span class="n">threshold</span><span class="o">=</span><span class="n">current_sigma</span><span class="p">)</span>
             <span class="n">res_cleaned</span> <span class="o">=</span> <span class="n">est</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">chunk</span><span class="p">)</span>
             <span class="n">res_n_removed</span> <span class="o">=</span> <span class="n">est</span><span class="o">.</span><span class="n">n_removed_</span>
 
@@ -1306,19 +1328,9 @@
             <span class="n">n_rem</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">res_n_removed</span><span class="p">,</span> <span class="n">max_rem_cap</span><span class="p">)</span>
             <span class="n">n_rem</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">n_rem</span><span class="p">,</span> <span class="n">current_min_remove</span><span class="p">)</span>
 
-            <span class="c1"># Refit if constraints changed n_removed</span>
+            <span class="c1"># Re-select if constraints changed n_removed</span>
             <span class="k">if</span> <span class="n">n_rem</span> <span class="o">!=</span> <span class="n">res_n_removed</span><span class="p">:</span>
-                <span class="n">est</span> <span class="o">=</span> <span class="n">ZapLine</span><span class="p">(</span>
-                    <span class="n">sfreq</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sfreq</span><span class="p">,</span>
-                    <span class="n">line_freq</span><span class="o">=</span><span class="n">fine_freq</span><span class="p">,</span>
-                    <span class="n">n_select</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">n_rem</span><span class="p">),</span>
-                    <span class="n">knee_rel_floor</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">knee_rel_floor</span><span class="p">,</span>
-                    <span class="n">knee_min_ratio</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">knee_min_ratio</span><span class="p">,</span>
-                    <span class="n">adaptive</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-                    <span class="c1"># The outer adaptive operation owns the aggregate report.</span>
-                    <span class="n">verbose</span><span class="o">=</span><span class="s2">"WARNING"</span><span class="p">,</span>
-                <span class="p">)</span>
-                <span class="n">est</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">chunk</span><span class="p">)</span>
+                <span class="n">est</span><span class="o">.</span><span class="n">_reselect</span><span class="p">(</span><span class="n">chunk</span><span class="p">,</span> <span class="n">n_select</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">n_rem</span><span class="p">))</span>
                 <span class="n">res_cleaned</span> <span class="o">=</span> <span class="n">est</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">chunk</span><span class="p">)</span>
                 <span class="n">res_n_removed</span> <span class="o">=</span> <span class="n">est</span><span class="o">.</span><span class="n">n_removed_</span>
 
