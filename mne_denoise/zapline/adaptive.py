@@ -9,6 +9,12 @@ from scipy.signal import find_peaks, welch
 from .._filtering import design_butter_sos
 
 
+def _log_psd(psd: np.ndarray) -> np.ndarray:
+    """Return the PSD in dB, floored 200 dB below its maximum to avoid log(0)."""
+    floor = max(float(np.max(psd)) * 1e-20, np.finfo(float).tiny)
+    return 10 * np.log10(np.maximum(psd, floor))
+
+
 def apply_cleanline_notch(
     data: np.ndarray,
     sfreq: float,
@@ -101,7 +107,7 @@ def apply_hybrid_cleanup(
     mean_filt = np.mean(psd_filt[:, surr_mask])
 
     # Power reduction in dB
-    reduction_db = 10 * np.log10(mean_orig / max(mean_filt, 1e-20))
+    reduction_db = 10 * np.log10(mean_orig / max(mean_filt, 1e-20 * mean_orig))
 
     if reduction_db > max_power_reduction_db:
         # Cleanup would cause too much collateral damage
@@ -148,7 +154,7 @@ def find_noise_freqs(
         data, fs=sfreq, window="hann", nperseg=n_fft, axis=-1, average="mean"
     )
 
-    psd_log = 10 * np.log10(np.clip(psd, 1e-20, None))
+    psd_log = _log_psd(psd)
     # Geometric mean over channels (mean in log space)
     mean_log_psd = np.mean(psd_log, axis=0)
 
@@ -238,7 +244,7 @@ def find_fine_peak(
     one_sided = np.where((bins == 0) | (2 * bins == n_fft), 1.0, 2.0)
     psd *= one_sided / (sfreq * np.sum(window**2) * len(starts))
 
-    psd_log = 10 * np.log10(np.clip(psd, 1e-20, None))
+    psd_log = _log_psd(psd)
     mean_log_psd = np.mean(psd_log, axis=0)
     return freqs[bins[np.argmax(mean_log_psd)]]
 
@@ -268,7 +274,7 @@ def check_artifact_presence(
     n_fft = min(n_times, int(sfreq * 4))
     freqs, psd = welch(data, fs=sfreq, nperseg=n_fft, axis=-1)
 
-    psd_log = 10 * np.log10(np.clip(psd, 1e-20, None))
+    psd_log = _log_psd(psd)
     mean_log_psd = np.mean(psd_log, axis=0)
 
     f_low = target_freq - 3
@@ -345,7 +351,7 @@ def detect_harmonics(
         n_fft = 1024
 
     freqs, psd = welch(data, fs=sfreq, window="hann", nperseg=n_fft, axis=-1)
-    psd_log = 10 * np.log10(np.clip(psd, 1e-20, None))
+    psd_log = _log_psd(psd)
     mean_log_psd = np.mean(psd_log, axis=0)
 
     freq_res = freqs[1] - freqs[0]
@@ -412,7 +418,7 @@ def check_spectral_qa(
     n_fft = min(n_times, int(sfreq * 4))
     freqs, psd = welch(data, fs=sfreq, nperseg=n_fft, axis=-1)
 
-    psd_log = 10 * np.log10(np.clip(psd, 1e-20, None))
+    psd_log = _log_psd(psd)
     mean_log_psd = np.mean(psd_log, axis=0)
 
     f_win_low = target_freq - 3
