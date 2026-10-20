@@ -493,12 +493,15 @@ def test_dss_weighted_fit_ignores_outliers():
     weights = np.ones(n_samples)
     weights[100:] = 0  # Ignore outlier region
 
+    # A bias with distinct DSS eigenvalues, so that the filters are unique
+    scale = np.arange(1.0, n_channels + 1)[:, np.newaxis]
+
     # Fit DSS on bad data with weights masking outliers
-    dss = DSS(n_components=2, bias=lambda x: x, normalize_input=False)
+    dss = DSS(n_components=2, bias=lambda x: x * scale, normalize_input=False)
     dss.fit(data_bad, weights=weights)
 
     # Fit DSS on clean data (first half only)
-    dss_clean = DSS(n_components=2, bias=lambda x: x, normalize_input=False)
+    dss_clean = DSS(n_components=2, bias=lambda x: x * scale, normalize_input=False)
     dss_clean.fit(data_clean[:, :100])
 
     # Filters should be nearly identical (up to sign flip)
