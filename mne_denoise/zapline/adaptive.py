@@ -15,6 +15,27 @@ def _log_psd(psd: np.ndarray) -> np.ndarray:
     return 10 * np.log10(np.maximum(psd, floor))
 
 
+def _welch_at(data, sfreq, nperseg, n_fft, bins):
+    """Return the Welch PSD at some FFT bins, without the spectrum of every segment.
+
+    Same as ``welch(data, sfreq, nperseg=nperseg, nfft=n_fft)[1][:, bins]`` (Hann
+    window, half overlap, constant detrend, density scaling).
+    """
+    if len(bins) > 64:
+        return welch(data, fs=sfreq, nperseg=nperseg, nfft=n_fft, axis=-1)[1][:, bins]
+    window = signal.get_window("hann", nperseg)
+    kernel = window[:, np.newaxis] * np.exp(
+        -2j * np.pi * np.outer(np.arange(nperseg), bins) / n_fft
+    )
+    starts = range(0, data.shape[1] - nperseg + 1, nperseg - nperseg // 2)
+    psd = np.zeros((data.shape[0], len(bins)))
+    for start in starts:
+        segment = data[:, start : start + nperseg]
+        psd += np.abs((segment - segment.mean(axis=1, keepdims=True)) @ kernel) ** 2
+    one_sided = np.where((bins == 0) | (2 * bins == n_fft), 1.0, 2.0)
+    return psd * one_sided / (sfreq * np.sum(window**2) * len(starts))
+
+
 def apply_cleanline_notch(
     data: np.ndarray,
     sfreq: float,
@@ -230,20 +251,7 @@ def find_fine_peak(
     if len(bins) == 0:
         return coarse_freq
 
-    # Welch PSD (Hann window, half overlap, constant detrend), at the search bins only
-    nperseg = min(n_times, 4 * int(sfreq))
-    window = signal.get_window("hann", nperseg)
-    kernel = window[:, np.newaxis] * np.exp(
-        -2j * np.pi * np.outer(np.arange(nperseg), bins) / n_fft
-    )
-    starts = range(0, n_times - nperseg + 1, nperseg - nperseg // 2)
-    psd = np.zeros((data.shape[0], len(bins)))
-    for start in starts:
-        segment = data[:, start : start + nperseg]
-        psd += np.abs((segment - segment.mean(axis=1, keepdims=True)) @ kernel) ** 2
-    one_sided = np.where((bins == 0) | (2 * bins == n_fft), 1.0, 2.0)
-    psd *= one_sided / (sfreq * np.sum(window**2) * len(starts))
-
+    psd = _welch_at(data, sfreq, min(n_times, 4 * int(sfreq)), n_fft, bins)
     psd_log = _log_psd(psd)
     mean_log_psd = np.mean(psd_log, axis=0)
     return freqs[bins[np.argmax(mean_log_psd)]]
@@ -272,10 +280,7 @@ def check_artifact_presence(
     """
     n_times = data.shape[1]
     n_fft = min(n_times, int(sfreq * 4))
-    freqs, psd = welch(data, fs=sfreq, nperseg=n_fft, axis=-1)
-
-    psd_log = _log_psd(psd)
-    mean_log_psd = np.mean(psd_log, axis=0)
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sfreq)
 
     f_low = target_freq - 3
     f_high = target_freq + 3
@@ -284,6 +289,14 @@ def check_artifact_presence(
     idx_end = np.argmax(freqs > f_high)
     if idx_end == 0:
         idx_end = len(freqs)
+    idx_target = np.argmin(np.abs(freqs - target_freq))
+
+    # the PSD is needed at the window and target bins only
+    bins = np.union1d(np.arange(idx_start, idx_end), idx_target)
+    mean_log_psd = np.empty(len(freqs))
+    mean_log_psd[bins] = np.mean(
+        _log_psd(_welch_at(data, sfreq, n_fft, n_fft, bins)), axis=0
+    )
 
     window_psd = mean_log_psd[idx_start:idx_end]
     if len(window_psd) < 3:
@@ -302,7 +315,6 @@ def check_artifact_presence(
     deviation = center_power - np.mean([q_left, q_right])
     threshold = center_power + 2 * deviation
 
-    idx_target = np.argmin(np.abs(freqs - target_freq))
     peak_val = mean_log_psd[idx_target]
 
     return peak_val > threshold
@@ -416,18 +428,21 @@ def check_spectral_qa(
     """
     n_times = data.shape[1]
     n_fft = min(n_times, int(sfreq * 4))
-    freqs, psd = welch(data, fs=sfreq, nperseg=n_fft, axis=-1)
-
-    psd_log = _log_psd(psd)
-    mean_log_psd = np.mean(psd_log, axis=0)
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sfreq)
 
     f_win_low = target_freq - 3
     f_win_high = target_freq + 3
 
     mask_win = (freqs >= f_win_low) & (freqs <= f_win_high)
-    win_psd = mean_log_psd[mask_win]
-    if len(win_psd) < 3:
+    if mask_win.sum() < 3:
         return "ok"
+    # the PSD is needed in this window only, which contains the bands below
+    bins = np.flatnonzero(mask_win)
+    mean_log_psd = np.empty(len(freqs))
+    mean_log_psd[bins] = np.mean(
+        _log_psd(_welch_at(data, sfreq, n_fft, n_fft, bins)), axis=0
+    )
+    win_psd = mean_log_psd[mask_win]
 
     n_third = len(win_psd) // 3
     left = win_psd[:n_third]
