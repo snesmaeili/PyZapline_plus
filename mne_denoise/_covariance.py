@@ -6,6 +6,8 @@ import numpy as np
 
 from ._validation import check_chunk_size
 
+_EMPIRICAL_CHUNK = 2**15  # default chunk_size of the empirical covariance
+
 
 def _flatten_observations(
     data: np.ndarray, weights: np.ndarray | None
@@ -114,24 +116,24 @@ def compute_covariance(
     else:
         total_weight = n_times
 
-    if assume_centered:
+    mean = None if assume_centered else (data @ weights / total_weight)[:, np.newaxis]
+    if method == "empirical" or mean is None:
         data_centered = data
     else:
-        mean = (data @ weights / total_weight)[:, np.newaxis]
         data_centered = data - mean
 
     if method == "empirical":
         # Weighted covariance: (X * w) @ X.T / sum(w)
         # Unweighted covariance: X @ X.T / n_times
-        if chunk_size is None:
-            cov = (data_centered * weights) @ data_centered.T / total_weight
-        else:
-            cov = np.zeros((n_channels, n_channels), dtype=float)
-            for start in range(0, n_times, chunk_size):
-                stop = min(start + chunk_size, n_times)
-                chunk = data_centered[:, start:stop]
-                cov += (chunk * weights[start:stop]) @ chunk.T
-            cov /= total_weight
+        step = _EMPIRICAL_CHUNK if chunk_size is None else chunk_size
+        cov = np.zeros((n_channels, n_channels), dtype=float)
+        for start in range(0, n_times, step):
+            stop = min(start + step, n_times)
+            chunk = data[:, start:stop]
+            if mean is not None:
+                chunk = chunk - mean
+            cov += (chunk * weights[start:stop]) @ chunk.T
+        cov /= total_weight
 
     elif method == "shrinkage":
         # Ledoit-Wolf-like shrinkage

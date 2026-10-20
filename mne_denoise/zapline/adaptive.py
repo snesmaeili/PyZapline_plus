@@ -219,22 +219,28 @@ def find_fine_peak(
     n_times = data.shape[1]
     n_fft = max(n_times, int(sfreq / 0.01))
 
-    freqs, psd = welch(
-        data, fs=sfreq, nperseg=min(n_times, 4 * int(sfreq)), nfft=n_fft, axis=-1
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sfreq)
+    bins = np.flatnonzero((freqs >= f_low) & (freqs <= f_high))
+    if len(bins) == 0:
+        return coarse_freq
+
+    # Welch PSD (Hann window, half overlap, constant detrend), at the search bins only
+    nperseg = min(n_times, 4 * int(sfreq))
+    window = signal.get_window("hann", nperseg)
+    kernel = window[:, np.newaxis] * np.exp(
+        -2j * np.pi * np.outer(np.arange(nperseg), bins) / n_fft
     )
+    starts = range(0, n_times - nperseg + 1, nperseg - nperseg // 2)
+    psd = np.zeros((data.shape[0], len(bins)))
+    for start in starts:
+        segment = data[:, start : start + nperseg]
+        psd += np.abs((segment - segment.mean(axis=1, keepdims=True)) @ kernel) ** 2
+    one_sided = np.where((bins == 0) | (2 * bins == n_fft), 1.0, 2.0)
+    psd *= one_sided / (sfreq * np.sum(window**2) * len(starts))
 
     psd_log = 10 * np.log10(np.clip(psd, 1e-20, None))
     mean_log_psd = np.mean(psd_log, axis=0)
-
-    mask = (freqs >= f_low) & (freqs <= f_high)
-    search_freqs = freqs[mask]
-    search_psd = mean_log_psd[mask]
-
-    if len(search_freqs) == 0:
-        return coarse_freq
-
-    idx_max = np.argmax(search_psd)
-    return search_freqs[idx_max]
+    return freqs[bins[np.argmax(mean_log_psd)]]
 
 
 def check_artifact_presence(

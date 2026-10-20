@@ -215,11 +215,24 @@ def test_frequency_detection_handles_empty_and_small_windows():
     )
 
 
-def test_fine_peak_returns_coarse_frequency_outside_spectrum():
-    """Fine target estimation falls back when the search band is unusable."""
-    data = np.random.default_rng(42).standard_normal((4, 1000))
+def test_fine_peak_finds_the_welch_maximum_or_falls_back():
+    """Fine target estimation finds the Welch peak, or falls back when unusable."""
+    rng = np.random.default_rng(42)
+    data = rng.standard_normal((4, 1000))
 
     assert find_fine_peak(data, 250.0, coarse_freq=200.0, search_width=0.05) == 200.0
+
+    sfreq = 250.0
+    times = np.arange(int(60 * sfreq)) / sfreq
+    data = rng.standard_normal((8, times.size)) + 3 * np.sin(2 * np.pi * 50.03 * times)
+    freqs, psd = signal.welch(
+        data, fs=sfreq, nperseg=int(4 * sfreq), nfft=int(sfreq / 0.01), axis=-1
+    )
+    band = np.abs(freqs - 50.0) <= 0.05
+    expected = freqs[band][np.argmax(np.mean(10 * np.log10(psd[:, band]), axis=0))]
+    fine = find_fine_peak(data, sfreq, coarse_freq=50.0)
+    assert fine == pytest.approx(expected, abs=1e-9)
+    assert abs(fine - 50.03) < 0.006
 
 
 def test_harmonic_detection_respects_presence_and_nyquist():

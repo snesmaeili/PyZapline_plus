@@ -123,6 +123,30 @@ def test_smoothing_reduces_variance():
     assert smooth_var < orig_var, "Smoothing should reduce variance"
 
 
+def test_smoothing_bias_is_a_causal_running_mean():
+    """Each sample is the mean of itself and the previous window - 1 samples."""
+    rng = np.random.default_rng(0)
+    data = rng.standard_normal((2, 40, 3)).astype(np.float32)
+    original = data.copy()
+    window = 4
+
+    smoothed = SmoothingBias(window=window, iterations=2).apply(data)
+
+    expected = original.reshape(2, -1).astype(np.float64)  # documented 3-D layout
+    for _ in range(2):
+        expected = np.stack(
+            [
+                expected[:, max(0, i - window + 1) : i + 1].mean(axis=1)
+                for i in range(expected.shape[1])
+            ],
+            axis=1,
+        )
+    assert smoothed.shape == data.shape
+    assert smoothed.dtype == np.float32
+    assert_allclose(smoothed.reshape(2, -1), expected, rtol=1e-5, atol=1e-6)
+    np.testing.assert_array_equal(data, original)
+
+
 def test_slow_signal_preserved():
     """Test that slow signals are preserved by smoothing."""
     n_times = 500

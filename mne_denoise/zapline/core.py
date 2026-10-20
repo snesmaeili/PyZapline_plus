@@ -429,8 +429,8 @@ class ZapLine(DSS):
         else:
             data_work = data
 
-        # 1. Smooth data
-        data_smooth, data_residual = self._get_smooth_residual(data_work, warn=True)
+        # 1. Smoothing residual
+        data_residual = self._get_residual(data_work, warn=True)
 
         # 2. Setup (Rank)
         dss_rank = self.nkeep if self.nkeep is not None else self.rank
@@ -476,7 +476,7 @@ class ZapLine(DSS):
                     self.line_freq,
                 )
                 self.n_removed_ = self._find_min_components_for_line_suppression(
-                    data_smooth=data_smooth,
+                    data_smooth=self._smooth(data_work),
                     data_residual=data_residual,
                     full_filters=qa_filters,
                     full_mixing=qa_mixing,
@@ -556,21 +556,9 @@ class ZapLine(DSS):
         if self.n_removed_ <= 0:
             return data.copy()
 
-        # 1. Smooth
-        data_smooth, data_residual = self._get_smooth_residual(data, warn=False)
-
-        # 2. Extract artifact sources using fitted filters (manual to avoid recentering)
-        # DSS filters are spatial (n_comp, n_ch).
-        # data_residual is (n_ch, n_times).
-        sources = self.filters_ @ data_residual
-
-        # 3. Project back to artifact using full DSS mixing for selected components.
-        artifact = self._artifact_mixing_ @ sources
-
-        # 4. Subtract artifact from residual, add back smooth
-        cleaned = data_smooth + (data_residual - artifact)
-
-        return cleaned
+        # The smoother is linear and per channel: smooth the sources, not the data
+        sources = self._get_residual(self.filters_ @ data)
+        return data - self._artifact_mixing_ @ sources
 
     def _get_smooth_residual(self, data: np.ndarray, warn: bool = False):
         """Split data into smooth and residual components."""
@@ -580,7 +568,19 @@ class ZapLine(DSS):
         if self.line_freq is None or self.line_freq == 0:
             # Should not happen in standard mode, effectively no cleaning
             return data, np.zeros_like(data)
+        data_smooth = self._smooth(data, warn=warn)
+        return data_smooth, data - data_smooth
 
+    def _get_residual(self, data: np.ndarray, warn: bool = False) -> np.ndarray:
+        """Return the residual of _get_smooth_residual in the smoothed buffer."""
+        if self.line_freq is None or self.line_freq == 0:
+            return np.zeros_like(data)
+        residual = self._smooth(data, warn=warn)
+        np.subtract(data, residual, out=residual)
+        return residual
+
+    def _smooth(self, data: np.ndarray, warn: bool = False) -> np.ndarray:
+        """Return the running mean of data over one line period, as a new array."""
         # Calculate exact period (may be non-integer)
         exact_period = self.sfreq / self.line_freq
         int_period = int(round(exact_period))
@@ -609,9 +609,7 @@ class ZapLine(DSS):
                 )
             smoother = SmoothingBias(window=int_period, iterations=1)
             data_smooth = smoother.apply(data)
-
-        data_residual = data - data_smooth
-        return data_smooth, data_residual
+        return data_smooth
 
     def _fractional_smooth(self, data: np.ndarray, period: float) -> np.ndarray:
         """Apply a causal boxcar of a fractional number of samples.
