@@ -6,7 +6,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>mne_denoise.dss.denoisers.temporal &#8212; mne-denoise 0.0.4.dev4+gb9eb4d98e documentation</title>
+    <title>mne_denoise.dss.denoisers.temporal &#8212; mne-denoise 0.0.4.dev5+g931d36104 documentation</title>
   
   
   
@@ -43,7 +43,7 @@
   <link rel="preload" as="script" href="../../../../_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be" />
 <link rel="preload" as="script" href="../../../../_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be" />
 
-    <script src="../../../../_static/documentation_options.js?v=24571a85"></script>
+    <script src="../../../../_static/documentation_options.js?v=14fae48e"></script>
     <script src="../../../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -64,7 +64,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.0.4.dev4+gb9eb4d98e" />
+  <meta name="docsearch:version" content="0.0.4.dev5+g931d36104" />
   
     
     <script src="../../../../_static/searchtools.js"></script>
@@ -645,20 +645,26 @@
             <span class="n">data_2d</span> <span class="o">=</span> <span class="n">data</span>
 
         <span class="n">W</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">window</span><span class="p">)</span>
-        <span class="n">smoothed</span> <span class="o">=</span> <span class="n">data_2d</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="n">smoothed</span> <span class="o">=</span> <span class="n">data_2d</span>
 
         <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">iterations</span><span class="p">):</span>
             <span class="n">mean_head</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">smoothed</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span> <span class="n">W</span> <span class="o">+</span> <span class="mi">1</span><span class="p">],</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdims</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-            <span class="n">centered</span> <span class="o">=</span> <span class="n">smoothed</span> <span class="o">-</span> <span class="n">mean_head</span>
+            <span class="k">if</span> <span class="n">smoothed</span> <span class="ow">is</span> <span class="n">data_2d</span><span class="p">:</span>
+                <span class="n">centered</span> <span class="o">=</span> <span class="n">smoothed</span> <span class="o">-</span> <span class="n">mean_head</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">centered</span> <span class="o">=</span> <span class="n">smoothed</span>
+                <span class="n">centered</span> <span class="o">-=</span> <span class="n">mean_head</span>
 
             <span class="c1"># Causal running mean via cumulative sums</span>
-            <span class="n">cs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">centered</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
-            <span class="n">out</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">centered</span><span class="p">)</span>
+            <span class="n">cs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">centered</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">out</span><span class="o">=</span><span class="n">centered</span><span class="p">)</span>
+            <span class="n">out</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">cs</span><span class="p">)</span>
             <span class="c1"># First W samples: expanding window</span>
             <span class="n">out</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="n">W</span><span class="p">]</span> <span class="o">=</span> <span class="n">cs</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="n">W</span><span class="p">]</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">W</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
             <span class="c1"># Remaining samples: fixed-width causal window</span>
-            <span class="n">out</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">W</span><span class="p">:]</span> <span class="o">=</span> <span class="p">(</span><span class="n">cs</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">W</span><span class="p">:]</span> <span class="o">-</span> <span class="n">cs</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="o">-</span><span class="n">W</span><span class="p">])</span> <span class="o">/</span> <span class="n">W</span>
-            <span class="n">smoothed</span> <span class="o">=</span> <span class="n">out</span> <span class="o">+</span> <span class="n">mean_head</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">subtract</span><span class="p">(</span><span class="n">cs</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">W</span><span class="p">:],</span> <span class="n">cs</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="o">-</span><span class="n">W</span><span class="p">],</span> <span class="n">out</span><span class="o">=</span><span class="n">out</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">W</span><span class="p">:])</span>
+            <span class="n">out</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">W</span><span class="p">:]</span> <span class="o">/=</span> <span class="n">W</span>
+            <span class="n">out</span> <span class="o">+=</span> <span class="n">mean_head</span>
+            <span class="n">smoothed</span> <span class="o">=</span> <span class="n">out</span>
 
         <span class="k">if</span> <span class="n">data</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">smoothed</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">orig_shape</span><span class="p">)</span>

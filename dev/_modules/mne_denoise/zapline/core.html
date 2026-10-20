@@ -6,7 +6,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>mne_denoise.zapline.core &#8212; mne-denoise 0.0.4.dev4+gb9eb4d98e documentation</title>
+    <title>mne_denoise.zapline.core &#8212; mne-denoise 0.0.4.dev5+g931d36104 documentation</title>
   
   
   
@@ -43,7 +43,7 @@
   <link rel="preload" as="script" href="../../../_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be" />
 <link rel="preload" as="script" href="../../../_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be" />
 
-    <script src="../../../_static/documentation_options.js?v=24571a85"></script>
+    <script src="../../../_static/documentation_options.js?v=14fae48e"></script>
     <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -64,7 +64,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.0.4.dev4+gb9eb4d98e" />
+  <meta name="docsearch:version" content="0.0.4.dev5+g931d36104" />
   
     
     <script src="../../../_static/searchtools.js"></script>
@@ -899,8 +899,8 @@
         <span class="k">else</span><span class="p">:</span>
             <span class="n">data_work</span> <span class="o">=</span> <span class="n">data</span>
 
-        <span class="c1"># 1. Smooth data</span>
-        <span class="n">data_smooth</span><span class="p">,</span> <span class="n">data_residual</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_smooth_residual</span><span class="p">(</span><span class="n">data_work</span><span class="p">,</span> <span class="n">warn</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="c1"># 1. Smoothing residual</span>
+        <span class="n">data_residual</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_residual</span><span class="p">(</span><span class="n">data_work</span><span class="p">,</span> <span class="n">warn</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
         <span class="c1"># 2. Setup (Rank)</span>
         <span class="n">dss_rank</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">nkeep</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">nkeep</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span>
@@ -946,7 +946,7 @@
                     <span class="bp">self</span><span class="o">.</span><span class="n">line_freq</span><span class="p">,</span>
                 <span class="p">)</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">n_removed_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_find_min_components_for_line_suppression</span><span class="p">(</span>
-                    <span class="n">data_smooth</span><span class="o">=</span><span class="n">data_smooth</span><span class="p">,</span>
+                    <span class="n">data_smooth</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_smooth</span><span class="p">(</span><span class="n">data_work</span><span class="p">),</span>
                     <span class="n">data_residual</span><span class="o">=</span><span class="n">data_residual</span><span class="p">,</span>
                     <span class="n">full_filters</span><span class="o">=</span><span class="n">qa_filters</span><span class="p">,</span>
                     <span class="n">full_mixing</span><span class="o">=</span><span class="n">qa_mixing</span><span class="p">,</span>
@@ -1026,21 +1026,9 @@
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_removed_</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">data</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
 
-        <span class="c1"># 1. Smooth</span>
-        <span class="n">data_smooth</span><span class="p">,</span> <span class="n">data_residual</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_smooth_residual</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">warn</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-
-        <span class="c1"># 2. Extract artifact sources using fitted filters (manual to avoid recentering)</span>
-        <span class="c1"># DSS filters are spatial (n_comp, n_ch).</span>
-        <span class="c1"># data_residual is (n_ch, n_times).</span>
-        <span class="n">sources</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">filters_</span> <span class="o">@</span> <span class="n">data_residual</span>
-
-        <span class="c1"># 3. Project back to artifact using full DSS mixing for selected components.</span>
-        <span class="n">artifact</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_artifact_mixing_</span> <span class="o">@</span> <span class="n">sources</span>
-
-        <span class="c1"># 4. Subtract artifact from residual, add back smooth</span>
-        <span class="n">cleaned</span> <span class="o">=</span> <span class="n">data_smooth</span> <span class="o">+</span> <span class="p">(</span><span class="n">data_residual</span> <span class="o">-</span> <span class="n">artifact</span><span class="p">)</span>
-
-        <span class="k">return</span> <span class="n">cleaned</span>
+        <span class="c1"># The smoother is linear and per channel: smooth the sources, not the data</span>
+        <span class="n">sources</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_residual</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">filters_</span> <span class="o">@</span> <span class="n">data</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">data</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">_artifact_mixing_</span> <span class="o">@</span> <span class="n">sources</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_get_smooth_residual</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">warn</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">"""Split data into smooth and residual components."""</span>
@@ -1050,7 +1038,19 @@
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">line_freq</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">line_freq</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
             <span class="c1"># Should not happen in standard mode, effectively no cleaning</span>
             <span class="k">return</span> <span class="n">data</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+        <span class="n">data_smooth</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_smooth</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">warn</span><span class="o">=</span><span class="n">warn</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">data_smooth</span><span class="p">,</span> <span class="n">data</span> <span class="o">-</span> <span class="n">data_smooth</span>
 
+    <span class="k">def</span><span class="w"> </span><span class="nf">_get_residual</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">warn</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Return the residual of _get_smooth_residual in the smoothed buffer."""</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">line_freq</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">line_freq</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+        <span class="n">residual</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_smooth</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">warn</span><span class="o">=</span><span class="n">warn</span><span class="p">)</span>
+        <span class="n">np</span><span class="o">.</span><span class="n">subtract</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">residual</span><span class="p">,</span> <span class="n">out</span><span class="o">=</span><span class="n">residual</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">residual</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_smooth</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">warn</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Return the running mean of data over one line period, as a new array."""</span>
         <span class="c1"># Calculate exact period (may be non-integer)</span>
         <span class="n">exact_period</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sfreq</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">line_freq</span>
         <span class="n">int_period</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">exact_period</span><span class="p">))</span>
@@ -1079,9 +1079,7 @@
                 <span class="p">)</span>
             <span class="n">smoother</span> <span class="o">=</span> <span class="n">SmoothingBias</span><span class="p">(</span><span class="n">window</span><span class="o">=</span><span class="n">int_period</span><span class="p">,</span> <span class="n">iterations</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
             <span class="n">data_smooth</span> <span class="o">=</span> <span class="n">smoother</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
-
-        <span class="n">data_residual</span> <span class="o">=</span> <span class="n">data</span> <span class="o">-</span> <span class="n">data_smooth</span>
-        <span class="k">return</span> <span class="n">data_smooth</span><span class="p">,</span> <span class="n">data_residual</span>
+        <span class="k">return</span> <span class="n">data_smooth</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_fractional_smooth</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">period</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">"""Apply a causal boxcar of a fractional number of samples.</span>
