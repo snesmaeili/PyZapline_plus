@@ -176,20 +176,26 @@ class SmoothingBias(LinearDenoiser):
             data_2d = data
 
         W = int(self.window)
-        smoothed = data_2d.copy()
+        smoothed = data_2d
 
         for _ in range(self.iterations):
             mean_head = np.mean(smoothed[..., : W + 1], axis=-1, keepdims=True)
-            centered = smoothed - mean_head
+            if smoothed is data_2d:
+                centered = smoothed - mean_head
+            else:
+                centered = smoothed
+                centered -= mean_head
 
             # Causal running mean via cumulative sums
-            cs = np.cumsum(centered, axis=-1)
-            out = np.empty_like(centered)
+            cs = np.cumsum(centered, axis=-1, out=centered)
+            out = np.empty_like(cs)
             # First W samples: expanding window
             out[..., :W] = cs[..., :W] / np.arange(1, W + 1)
             # Remaining samples: fixed-width causal window
-            out[..., W:] = (cs[..., W:] - cs[..., :-W]) / W
-            smoothed = out + mean_head
+            np.subtract(cs[..., W:], cs[..., :-W], out=out[..., W:])
+            out[..., W:] /= W
+            out += mean_head
+            smoothed = out
 
         if data.ndim == 3:
             return smoothed.reshape(orig_shape)

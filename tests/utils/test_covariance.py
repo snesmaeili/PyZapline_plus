@@ -47,6 +47,18 @@ def test_empirical_covariance_chunking_and_validation():
     full = compute_covariance(data, weights=weights)
     chunked = compute_covariance(data, weights=weights, chunk_size=47)
     assert_allclose(chunked, full, rtol=1e-12, atol=1e-12)
+    assert_allclose(
+        compute_covariance(data, chunk_size=47),
+        compute_covariance(data),
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    # longer than the default chunk: still the plain formula
+    long = rng.standard_normal((3, 70_000)) + 5.0
+    centered = long - long.mean(axis=1, keepdims=True)
+    assert_allclose(
+        compute_covariance(long), centered @ centered.T / long.shape[1], rtol=1e-12
+    )
 
     for label, chunk_size in (
         ("zero", 0),
