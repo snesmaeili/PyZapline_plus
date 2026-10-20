@@ -463,3 +463,24 @@ def test_adaptive_whitening_returns_sensor_space():
         ratio = np.std(cleaned.get_data()[picks]) / np.std(data[picks])
         assert 0.1 < ratio < 10.0
     assert zap.adaptive_results_["removed"].shape == data.shape
+
+
+def test_adaptive_keeps_estimator_settings_with_a_minimum_component_count():
+    """Segments honor settings such as n_harmonics when min_remove applies."""
+    rng = np.random.default_rng(0)
+    sfreq = 500.0
+    times = np.arange(int(90 * sfreq)) / sfreq
+    data = rng.standard_normal((16, times.size))
+    data += np.outer(rng.standard_normal(16), 5 * np.sin(2 * np.pi * 50 * times))
+    data += np.outer(rng.standard_normal(16), 5 * np.sin(2 * np.pi * 100 * times + 1))
+
+    cleaned = ZapLine(
+        sfreq=sfreq,
+        line_freq=50.0,
+        n_harmonics=1,
+        adaptive=True,
+        adaptive_params={"n_remove_params": {"min_remove": 3}},
+    ).fit_transform(data)
+
+    assert _power_at(cleaned, 50.0, sfreq) < 0.01 * _power_at(data, 50.0, sfreq)
+    assert _power_at(cleaned, 100.0, sfreq) > 0.9 * _power_at(data, 100.0, sfreq)

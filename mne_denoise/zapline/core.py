@@ -461,7 +461,12 @@ class ZapLine(DSS):
                 dewhitener=self._dewhitener_,
             )
         self.mixing_ = full_mixing
+        self._full_filters_, self._full_mixing_ = full_filters, full_mixing
+        self._qa_filters_, self._qa_mixing_ = qa_filters, qa_mixing
+        self._select_components(data_work, data_residual)
 
+    def _select_components(self, data_work, data_residual=None):
+        """Choose and keep the removed components of the fitted decomposition."""
         # 4. Resolve the component count. DSS.auto_select handles both the 'auto' and
         # the explicit-int cases, so the primary policy lives in exactly one place.
         self.n_removed_ = self.auto_select()
@@ -475,11 +480,13 @@ class ZapLine(DSS):
                     "component counts spectrally.",
                     self.line_freq,
                 )
+                if data_residual is None:
+                    data_residual = self._get_residual(data_work)
                 self.n_removed_ = self._find_min_components_for_line_suppression(
                     data_smooth=self._smooth(data_work),
                     data_residual=data_residual,
-                    full_filters=qa_filters,
-                    full_mixing=qa_mixing,
+                    full_filters=self._qa_filters_,
+                    full_mixing=self._qa_mixing_,
                 )
                 logger.debug(
                     "ZapLine spectral fallback selected %d components.",
@@ -496,14 +503,26 @@ class ZapLine(DSS):
 
         # 5. Truncate to line-dominated DSS components.
         # Use DSS mixing from the full decomposition to reconstruct artifacts.
+        n_channels = self._full_mixing_.shape[0]
         if self.n_removed_ > 0:
-            self.filters_ = full_filters[: self.n_removed_]
-            self._artifact_mixing_ = full_mixing[:, : self.n_removed_]
+            self.filters_ = self._full_filters_[: self.n_removed_]
+            self._artifact_mixing_ = self._full_mixing_[:, : self.n_removed_]
             self.patterns_ = self._artifact_mixing_
         else:
-            self.filters_ = np.zeros((0, data.shape[0]))
-            self.patterns_ = np.zeros((data.shape[0], 0))
-            self._artifact_mixing_ = np.zeros((data.shape[0], 0))
+            self.filters_ = np.zeros((0, n_channels))
+            self.patterns_ = np.zeros((n_channels, 0))
+            self._artifact_mixing_ = np.zeros((n_channels, 0))
+
+    def _reselect(self, data, *, n_select, threshold=None):
+        """Select another number of components without refitting the DSS."""
+        self.n_select = n_select
+        if threshold is not None:
+            self.threshold = self.selection_threshold = threshold
+        if self.whiten:
+            data = self._prewhiten_sensor_data(
+                data, info=self._whitening_info_, ch_names=self._mne_ch_names_
+            )
+        self._select_components(data)
 
     def _find_min_components_for_line_suppression(
         self,
@@ -809,25 +828,28 @@ class ZapLine(DSS):
         res_n_removed = 0
         res_cleaned = chunk.copy()
 
-        for _retry in range(max_retries):
-            # Fresh ZapLine for this chunk. Deriving it from get_params()
-            # carries every setting (rank, reg, whiten, nfft, ...) rather than
-            # silently dropping whatever this call site forgot to list.
-            est = type(self)(
-                **{
-                    **self.get_params(),
-                    "line_freq": fine_freq,
-                    "n_select": "auto",
-                    "threshold": current_sigma,
-                    "adaptive": False,
-                    "crossfade": 0.0,
-                    "verbose": "WARNING",
-                }
-            )
+        # ZapLine for this chunk. Deriving it from get_params() carries every
+        # setting (rank, reg, whiten, nfft, ...) rather than silently dropping
+        # whatever this call site forgot to list.
+        est = type(self)(
+            **{
+                **self.get_params(),
+                "line_freq": fine_freq,
+                "n_select": "auto",
+                "threshold": current_sigma,
+                "adaptive": False,
+                "crossfade": 0.0,
+                "verbose": "WARNING",
+            }
+        )
 
-            # Adaptive ZapLine owns the segment-level aggregate report; hide
-            # each retry's nested DSS fit from the user-facing INFO stream.
-            est.fit(chunk)
+        # Adaptive ZapLine owns the segment-level aggregate report; hide the
+        # nested DSS fit from the user-facing INFO stream. The decomposition does
+        # not depend on the selection, so the retries only re-select components.
+        est.fit(chunk)
+        for _retry in range(max_retries):
+            if _retry:
+                est._reselect(chunk, n_select="auto", threshold=current_sigma)
             res_cleaned = est.transform(chunk)
             res_n_removed = est.n_removed_
 
@@ -836,19 +858,9 @@ class ZapLine(DSS):
             n_rem = min(res_n_removed, max_rem_cap)
             n_rem = max(n_rem, current_min_remove)
 
-            # Refit if constraints changed n_removed
+            # Re-select if constraints changed n_removed
             if n_rem != res_n_removed:
-                est = ZapLine(
-                    sfreq=self.sfreq,
-                    line_freq=fine_freq,
-                    n_select=int(n_rem),
-                    knee_rel_floor=self.knee_rel_floor,
-                    knee_min_ratio=self.knee_min_ratio,
-                    adaptive=False,
-                    # The outer adaptive operation owns the aggregate report.
-                    verbose="WARNING",
-                )
-                est.fit(chunk)
+                est._reselect(chunk, n_select=int(n_rem))
                 res_cleaned = est.transform(chunk)
                 res_n_removed = est.n_removed_
 
