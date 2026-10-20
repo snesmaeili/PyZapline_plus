@@ -93,7 +93,7 @@ class CovarianceSegmenter:
             chunk = data_filt[:, start:end]
             cov = compute_covariance(chunk)
             tr = np.trace(cov)
-            if tr > 1e-20:
+            if tr > 0:
                 cov = cov / tr
             covs.append(cov)
 

@@ -55,6 +55,13 @@ def test_covariance_segmenter_stationarity_contract():
         nonstationary
     )
     assert len(split_segments) >= 2
+    # the same segments for data in other units, e.g. MEG in tesla
+    assert (
+        CovarianceSegmenter(sfreq=sfreq, min_chunk_len=5.0).segment(
+            nonstationary * 1e-12
+        )
+        == split_segments
+    )
     _assert_contiguous_cover(split_segments, nonstationary.shape[1])
 
 

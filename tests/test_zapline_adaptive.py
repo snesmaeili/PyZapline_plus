@@ -89,6 +89,13 @@ def test_adaptive_detects_line_frequency_and_artifact():
     assert check_artifact_presence(data, sfreq, target_freq=50.0)
     assert not check_artifact_presence(data, sfreq, target_freq=60.0)
 
+    # the same decisions for data in other units, e.g. MEG in tesla
+    meg = data * 1e-12
+    assert find_noise_freqs(meg, sfreq, fmin=45.0, fmax=55.0) == frequencies
+    assert check_artifact_presence(meg, sfreq, target_freq=50.0)
+    assert find_fine_peak(meg, sfreq, 50.0) == find_fine_peak(data, sfreq, 50.0)
+    assert check_spectral_qa(meg, sfreq, 50.0) == check_spectral_qa(data, sfreq, 50.0)
+
 
 def test_adaptive_tracks_frequency_drift_and_preserves_quiet_tail():
     """Adaptive cleaning follows segment-specific targets and leaves quiet data usable."""
@@ -181,18 +188,19 @@ def test_hybrid_cleanup_falls_back_for_short_or_overcleaned_data():
     rng = np.random.default_rng(42)
     data = np.sin(2 * np.pi * 50 * np.arange(1000) / 1000.0)[None, :]
 
-    with patch("mne_denoise.zapline.adaptive.welch") as mock_welch:
-        freqs = np.linspace(0, 100, 100)
-        mock_welch.side_effect = [
-            (freqs, np.ones((1, 100))),
-            (freqs, np.full((1, 100), 1e-10)),
-        ]
-        cleaned = apply_hybrid_cleanup(data, sfreq=1000.0, freq=50.0)
+    for scale in (1.0, 1e-24):  # also with PSDs of MEG data in tesla
+        with patch("mne_denoise.zapline.adaptive.welch") as mock_welch:
+            freqs = np.linspace(0, 100, 100)
+            mock_welch.side_effect = [
+                (freqs, np.full((1, 100), scale)),
+                (freqs, np.full((1, 100), 1e-10 * scale)),
+            ]
+            cleaned = apply_hybrid_cleanup(data, sfreq=1000.0, freq=50.0)
+        assert_allclose(cleaned, data)
 
     short = rng.standard_normal((4, 100))
     short_cleaned = apply_hybrid_cleanup(short, sfreq=100.0, freq=25.0)
 
-    assert_allclose(cleaned, data)
     assert short_cleaned.shape == short.shape
 
 
@@ -256,6 +264,7 @@ def test_harmonic_detection_respects_presence_and_nyquist():
     )
 
     assert any(np.isclose(harmonics, 100.0))
+    assert detect_harmonics(data * 1e-12, sfreq, 50.0, max_harmonics=3) == harmonics
     assert none == []
     assert all(harmonic < 125.0 for harmonic in near_nyquist)
 
